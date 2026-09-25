@@ -1,0 +1,11 @@
+.DS_Store
+**/.DS_Store
+*.log
+.env
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# stray scratch files
+.deckjs.tmp
