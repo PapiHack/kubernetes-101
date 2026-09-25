@@ -77,3 +77,13 @@ Every lab is designed so a stuck student can rejoin at the next one. The rules:
 ## Going Further
 
 Persistent storage in depth (PV/PVC get a first look in the Session 3 bonus lab), probes, RBAC, Helm, GitOps (ArgoCD), managed clusters (EKS/AKS/GKE), and the [CKAD certification](https://www.cncf.io/training/certification/ckad/) as a goal. See [docs/resources.md](docs/resources.md).
+
+
+## Authors
+
+- [A.K.C](https://github.com/Rim-k)
+  [![My Twitter Link](https://img.shields.io/twitter/follow/rimk90?style=social)](https://twitter.com/rimk90)
+
+- [M.B.C.M](https://github.com/PapiHack)
+  [![My Twitter Link](https://img.shields.io/twitter/follow/the_it_dev?style=social)](https://twitter.com/the_it_dev)
+
