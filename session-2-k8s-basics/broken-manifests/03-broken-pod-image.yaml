@@ -1,0 +1,14 @@
+# BROKEN ON PURPOSE — bug 3 of 3. This one the cluster accepts happily.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: broken-image-pod
+  labels:
+    app: hello
+spec:
+  containers:
+    - name: web
+      image: hello-k8s:2.0
+      imagePullPolicy: IfNotPresent
+      ports:
+        - containerPort: 5000

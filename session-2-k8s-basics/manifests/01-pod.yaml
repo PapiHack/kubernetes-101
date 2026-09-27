@@ -1,0 +1,19 @@
+# The image you built in Session 1. Build it and load it into the cluster first:
+#   docker build -t hello-k8s:1.0 ../session-1-containers/app
+#   kind load docker-image hello-k8s:1.0 --name k8s101
+#   # k3d: k3d image import hello-k8s:1.0 -c k8s101
+apiVersion: v1
+kind: Pod
+metadata:
+  name: hello-pod
+  labels:
+    app: hello
+spec:
+  containers:
+    - name: web
+      image: hello-k8s:1.0
+      # The tag is not :latest, so the default policy is already IfNotPresent.
+      # Spelled out here so it is obvious the cluster must not try to reach a registry.
+      imagePullPolicy: IfNotPresent
+      ports:
+        - containerPort: 5000

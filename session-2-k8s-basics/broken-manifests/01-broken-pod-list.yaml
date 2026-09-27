@@ -1,0 +1,14 @@
+# BROKEN ON PURPOSE — bug 1 of 3. Do not fix it by copying 01-pod.yaml; find it.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: broken-pod
+  labels:
+    app: hello
+spec:
+  containers:
+      name: web
+      image: hello-k8s:1.0
+      imagePullPolicy: IfNotPresent
+      ports:
+        - containerPort: 5000
