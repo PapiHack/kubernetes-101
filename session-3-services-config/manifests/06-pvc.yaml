@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: hello-data
+spec:
+  accessModes:
+    - ReadWriteOnce          # one node can mount it read-write
+  resources:
+    requests:
+      storage: 100Mi
+  # No storageClassName: kind/k3d ship a default StorageClass
+  # ("standard" / "local-path") that provisions a PV automatically.

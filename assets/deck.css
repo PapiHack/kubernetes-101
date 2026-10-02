@@ -148,6 +148,8 @@ svg.dia .bad-txt{fill:var(--bad)}
 svg.dia .ok-txt{fill:var(--ok)}
 
 .ref{margin-top:1.2em;font-size:clamp(.82rem,1.1vw,.98rem);color:var(--muted)}
+.slide a{color:var(--accent);text-decoration:none;border-bottom:1px solid transparent}
+.slide a:hover{border-bottom-color:var(--accent)}
 .ref a{color:var(--accent);text-decoration:none;border-bottom:1px solid transparent}
 .ref a:hover{border-bottom-color:var(--accent)}
 .ref::before{content:"Read more  ";color:var(--muted)}

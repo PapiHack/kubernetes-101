@@ -1,0 +1,32 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hello-deploy
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: hello
+  template:
+    metadata:
+      labels:
+        app: hello
+    spec:
+      containers:
+        - name: web
+          # Build & load the Session 1 app first:
+          #   docker build -t hello-k8s:1.0 ../session-1-containers/app
+          #   kind load docker-image hello-k8s:1.0 --name k8s101
+          image: hello-k8s:1.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 5000
+          envFrom:
+            - configMapRef:
+                name: hello-config
+          env:
+            - name: API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: hello-secret
+                  key: API_KEY

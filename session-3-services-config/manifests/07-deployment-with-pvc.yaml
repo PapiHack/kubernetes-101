@@ -1,0 +1,39 @@
+# Same Deployment as 05, plus a persistent volume mounted at /data.
+# Note: replicas is set to 1 — a ReadWriteOnce PVC can only be mounted
+# on one node, so multiple replicas could get stuck Pending on multi-node clusters.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hello-deploy
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: hello
+  template:
+    metadata:
+      labels:
+        app: hello
+    spec:
+      containers:
+        - name: web
+          image: hello-k8s:1.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 5000
+          envFrom:
+            - configMapRef:
+                name: hello-config
+          env:
+            - name: API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: hello-secret
+                  key: API_KEY
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: hello-data

@@ -1,0 +1,2441 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Session 3 — Exposing &amp; Configuring Applications</title>
+<link rel="stylesheet" href="../../assets/deck.css">
+</head>
+<body>
+<div class="progress" id="progress"></div>
+<div class="deck" id="deck">
+
+<!-- 1 -->
+<section class="slide">
+<div class="kicker">Kubernetes 101 &middot; Session 3 of 4</div>
+<h1>Expose &amp;<br>configure</h1>
+<p class="sub">Your Pods run. Nobody can reach them, and their config is baked in.</p>
+<div class="notes">By the end: why Pod IPs are useless and what a Service does, the Service manifest field by field, reaching an app by DNS name across namespaces (namespaces themselves were covered in Session 2), only then ClusterIP vs NodePort vs LoadBalancer, Ingress by path and by host and a look ahead to Gateway API, ConfigMaps and Secrets, scaling and rolling updates with rollback, probes, and resource requests/limits. The deck grew from the review: keep Gateway API to one minute, and treat the PVC bonus as the flex slide if time runs short.</div>
+</section>
+
+<!-- 2 -->
+<section class="slide">
+<div class="kicker">Problem 1</div>
+<h2>Pods are moving targets</h2>
+<svg class="dia" viewBox="0 0 1000 300" style="max-height:40vh" role="img" aria-label="Three Pods with IP addresses; one is replaced and comes back with a different IP">
+  <text x="240" y="34" class="sm" text-anchor="middle">before</text>
+  <rect x="40" y="52" width="180" height="72" rx="12" class="fill-soft stroke-accent"/>
+  <text x="130" y="80" class="lbl" text-anchor="middle">Pod</text>
+  <text x="130" y="104" class="mono accent-txt" text-anchor="middle">10.244.0.7</text>
+  <rect x="40" y="140" width="180" height="72" rx="12" class="fill-soft stroke-accent"/>
+  <text x="130" y="168" class="lbl" text-anchor="middle">Pod</text>
+  <text x="130" y="192" class="mono accent-txt" text-anchor="middle">10.244.0.8</text>
+  <rect x="260" y="96" width="180" height="72" rx="12" class="fill-bad stroke-bad"/>
+  <text x="350" y="124" class="lbl bad-txt" text-anchor="middle">Pod ✗</text>
+  <text x="350" y="148" class="mono bad-txt" text-anchor="middle">10.244.0.9</text>
+
+  <path d="M470 132 H560" class="stroke-accent nofill"/>
+  <path d="M554 124 l14 8 l-14 8 z" fill="var(--accent)"/>
+  <text x="515" y="112" class="tiny" text-anchor="middle">replaced</text>
+
+  <text x="760" y="34" class="sm" text-anchor="middle">after</text>
+  <rect x="580" y="52" width="180" height="72" rx="12" class="fill-soft stroke-accent"/>
+  <text x="670" y="80" class="lbl" text-anchor="middle">Pod</text>
+  <text x="670" y="104" class="mono accent-txt" text-anchor="middle">10.244.0.7</text>
+  <rect x="580" y="140" width="180" height="72" rx="12" class="fill-soft stroke-accent"/>
+  <text x="670" y="168" class="lbl" text-anchor="middle">Pod</text>
+  <text x="670" y="192" class="mono accent-txt" text-anchor="middle">10.244.0.8</text>
+  <rect x="800" y="96" width="180" height="72" rx="12" class="fill-ok stroke-ok"/>
+  <text x="890" y="124" class="lbl ok-txt" text-anchor="middle">new Pod</text>
+  <text x="890" y="148" class="mono ok-txt" text-anchor="middle">10.244.0.<tspan style="font-weight:700">42</tspan></text>
+
+  <text x="500" y="266" class="sm" text-anchor="middle">new name &middot; new IP &middot; every single time</text>
+</svg>
+<p class="punch">You cannot hardcode a Pod IP. <em>Ever.</em></p>
+<div class="notes">Scale to 5 and two more IPs appear; scale down and they vanish. A Deployment with 3 replicas is 3 different IPs — which one would you even call? You need something stable in front of a moving set of Pods.</div>
+</section>
+
+<!-- 3 -->
+<section class="slide">
+<h2>The Service</h2>
+<svg class="dia" viewBox="0 0 1000 330" style="max-height:42vh" role="img" aria-label="A caller reaches a Service by a stable name, which load-balances to the Pods matching its selector">
+  <rect x="20" y="120" width="180" height="80" rx="14" class="fill-panel stroke-line"/>
+  <text x="110" y="152" class="lbl" text-anchor="middle">caller</text>
+  <text x="110" y="176" class="sm" text-anchor="middle">frontend, curl…</text>
+
+  <path d="M208 160 H288" class="stroke-accent nofill"/>
+  <path d="M282 152 l14 8 l-14 8 z" fill="var(--accent)"/>
+
+  <rect x="300" y="96" width="290" height="128" rx="16" class="fill-soft stroke-accent"/>
+  <text x="445" y="130" class="lbl accent-txt" text-anchor="middle">Service &nbsp;hello-svc</text>
+  <text x="445" y="158" class="mono" text-anchor="middle">stable name + virtual IP</text>
+  <text x="445" y="186" class="mono accent-txt" text-anchor="middle">selector: app=hello</text>
+  <text x="445" y="210" class="tiny" text-anchor="middle">port 80 &rarr; targetPort 5000</text>
+
+  <g class="stroke-accent nofill">
+    <path d="M598 130 L700 66"/>
+    <path d="M598 160 L700 160"/>
+    <path d="M598 190 L700 254"/>
+  </g>
+
+  <rect x="710" y="34" width="260" height="64" rx="12" class="fill-soft stroke-soft"/>
+  <text x="840" y="62" class="lbl" text-anchor="middle">Pod</text>
+  <text x="840" y="84" class="mono sm" text-anchor="middle">app: hello &middot; :5000</text>
+  <rect x="710" y="128" width="260" height="64" rx="12" class="fill-soft stroke-soft"/>
+  <text x="840" y="156" class="lbl" text-anchor="middle">Pod</text>
+  <text x="840" y="178" class="mono sm" text-anchor="middle">app: hello &middot; :5000</text>
+  <rect x="710" y="222" width="260" height="64" rx="12" class="fill-soft stroke-soft"/>
+  <text x="840" y="250" class="lbl" text-anchor="middle">Pod</text>
+  <text x="840" y="272" class="mono sm" text-anchor="middle">app: hello &middot; :5000</text>
+
+  <text x="840" y="316" class="tiny" text-anchor="middle">membership is automatic — new matching Pod, new backend</text>
+</svg>
+<div class="ref"><a href="https://kubernetes.io/docs/concepts/services-networking/service/" target="_blank" rel="noopener">Service</a></div>
+<div class="notes">The Service is a stable name and virtual IP that load-balances across every Pod matching its selector. Pods come and go; the Service IP and name never change. Two ports to keep straight: `port` is what the Service listens on, `targetPort` is what the container listens on — mixing them up is a Session 4 bug.</div>
+</section>
+
+<!-- 3b -->
+<section class="slide">
+<h2>The Service, field by field</h2>
+<svg class="dia" viewBox="0 0 1000 480" style="max-height:60vh" role="img" aria-label="Left: a ClusterIP Service manifest in an editor, its parts framed in colour — apiVersion and kind, metadata, spec, with the selector and the ports block framed inside the spec. Right: the same Service drawn — a named box with a port 80 doorway, arrows down to the two Pods that its selector matches, each listening on 5000.">
+  <style>
+    svg.dia .sspA{--c:#0f766e}svg.dia .sspB{--c:#7c3aed}svg.dia .sspC{--c:#b45309}svg.dia .sspD{--c:#be185d}
+    svg.dia .sspEdge{fill:none;stroke:var(--c);stroke-width:2}
+    svg.dia .sspEdgeD{fill:none;stroke:var(--c);stroke-width:1.5;stroke-dasharray:5 4}
+    svg.dia .sspLine{fill:none;stroke:var(--c);stroke-width:2}
+    svg.dia .sspTag{fill:var(--c)}
+    svg.dia .sspTagTxt{font-size:11.5px;font-weight:700;fill:var(--bg);letter-spacing:.05em}
+    svg.dia .sspTagO{fill:var(--code-bg);stroke:var(--c);stroke-width:1.5}
+    svg.dia .sspTagOTxt{font-size:11.5px;font-weight:700;fill:var(--c);letter-spacing:.05em}
+    svg.dia .sspBig{font-size:18px;font-weight:700;fill:var(--c)}
+    svg.dia .sspKey{fill:var(--c);font-weight:700}
+    svg.dia .sspDot{fill:var(--c)}
+    svg.dia .sspTxt{fill:var(--c)}
+    @media (prefers-color-scheme: dark){
+      svg.dia .sspA{--c:#4dd0bd}svg.dia .sspB{--c:#a78bfa}svg.dia .sspC{--c:#f0b352}svg.dia .sspD{--c:#f472b6}
+    }
+  </style>
+
+  <text x="16" y="42" class="sm">the manifest&hellip;</text>
+  <text x="984" y="42" class="sm" text-anchor="end">&hellip;and the thing it describes</text>
+
+  <rect x="16" y="56" width="470" height="380" rx="10" class="stroke-line" fill="var(--code-bg)"/>
+  <path d="M16 90 H486" class="stroke-line nofill"/>
+  <circle cx="38" cy="73" r="5" class="fill-panel stroke-line"/>
+  <circle cx="56" cy="73" r="5" class="fill-panel stroke-line"/>
+  <circle cx="74" cy="73" r="5" class="fill-panel stroke-line"/>
+  <text x="96" y="78" class="sm">service.yaml</text>
+  <path d="M68 90 V436" class="stroke-line nofill"/>
+
+  <g class="sspA"><rect x="80" y="111" width="384" height="48" rx="9" class="sspEdge"/>
+    <rect x="326" y="101" width="138" height="20" rx="6" class="sspTag"/>
+    <text x="395" y="115" class="sspTagTxt" text-anchor="middle">APIVERSION + KIND</text></g>
+  <g class="sspB"><rect x="80" y="159" width="384" height="48" rx="9" class="sspEdge"/>
+    <rect x="388" y="149" width="76" height="20" rx="6" class="sspTag"/>
+    <text x="426" y="163" class="sspTagTxt" text-anchor="middle">METADATA</text></g>
+  <g class="sspC"><rect x="80" y="207" width="384" height="205" rx="9" class="sspEdge"/>
+    <rect x="414" y="197" width="50" height="20" rx="6" class="sspTag"/>
+    <text x="439" y="211" class="sspTagTxt" text-anchor="middle">SPEC</text>
+    <rect x="96" y="327" width="352" height="75" rx="8" class="sspEdgeD"/>
+    <rect x="390" y="317" width="58" height="20" rx="6" class="sspTagO"/>
+    <text x="419" y="331" class="sspTagOTxt" text-anchor="middle">PORTS</text></g>
+  <g class="sspD"><rect x="96" y="255" width="352" height="52" rx="8" class="sspEdgeD"/>
+    <rect x="370" y="245" width="78" height="20" rx="6" class="sspTagO"/>
+    <text x="409" y="259" class="sspTagOTxt" text-anchor="middle">SELECTOR</text></g>
+
+  <text x="58" y="128" class="tiny" text-anchor="end">1</text>
+  <text x="106" y="128" class="mono" font-size="13"><tspan class="sspKey sspA">apiVersion</tspan>: v1</text>
+  <text x="58" y="152" class="tiny" text-anchor="end">2</text>
+  <text x="106" y="152" class="mono" font-size="13"><tspan class="sspKey sspA">kind</tspan>: Service</text>
+  <text x="58" y="176" class="tiny" text-anchor="end">3</text>
+  <text x="106" y="176" class="mono" font-size="13"><tspan class="sspKey sspB">metadata</tspan>:</text>
+  <text x="58" y="200" class="tiny" text-anchor="end">4</text>
+  <text x="122" y="200" class="mono" font-size="13">name: hello-svc</text>
+  <text x="58" y="224" class="tiny" text-anchor="end">5</text>
+  <text x="106" y="224" class="mono" font-size="13"><tspan class="sspKey sspC">spec</tspan>:</text>
+  <text x="58" y="248" class="tiny" text-anchor="end">6</text>
+  <text x="122" y="248" class="mono" font-size="13">type: ClusterIP</text>
+  <text x="58" y="272" class="tiny" text-anchor="end">7</text>
+  <text x="122" y="272" class="mono" font-size="13"><tspan class="sspKey sspD">selector</tspan>:</text>
+  <text x="58" y="296" class="tiny" text-anchor="end">8</text>
+  <text x="138" y="296" class="mono" font-size="13">app: hello</text>
+  <text x="58" y="320" class="tiny" text-anchor="end">9</text>
+  <text x="58" y="344" class="tiny" text-anchor="end">10</text>
+  <text x="122" y="344" class="mono" font-size="13"><tspan class="sspKey sspC">ports</tspan>:</text>
+  <text x="58" y="368" class="tiny" text-anchor="end">11</text>
+  <text x="138" y="368" class="mono" font-size="13">- port: 80</text>
+  <text x="58" y="392" class="tiny" text-anchor="end">12</text>
+  <text x="154" y="392" class="mono" font-size="13">targetPort: 5000</text>
+
+  <g class="sspC">
+    <rect x="530" y="66" width="450" height="186" rx="18" class="fill-panel"/>
+    <rect x="530" y="66" width="450" height="186" rx="18" class="sspEdge"/>
+  </g>
+  <circle cx="556" cy="94" r="7" class="sspDot sspA"/>
+  <text x="572" y="101" class="sspBig sspA">Service</text>
+
+  <g class="sspB">
+    <rect x="556" y="116" width="220" height="36" rx="9" class="fill-panel"/>
+    <rect x="556" y="116" width="220" height="36" rx="9" class="sspEdge"/>
+    <text x="572" y="140" class="mono" font-size="14">hello-svc</text>
+  </g>
+  <text x="792" y="140" class="tiny">the name callers dial</text>
+
+  <text x="556" y="178" class="sm">ClusterIP &mdash; one stable virtual IP, reachable only from inside the cluster</text>
+
+  <g class="sspC">
+    <rect x="556" y="194" width="130" height="32" rx="8" class="fill-panel"/>
+    <rect x="556" y="194" width="130" height="32" rx="8" class="sspEdge"/>
+    <text x="621" y="216" class="mono sspTxt" font-size="13" text-anchor="middle">port 80</text>
+  </g>
+  <text x="700" y="216" class="tiny">what the Service listens on</text>
+
+  <g class="sspC sspLine">
+    <path d="M639 256 V330"/>
+    <path d="M871 256 V330"/>
+  </g>
+  <g class="sspC" fill="var(--c)">
+    <path d="M-7 -5 L0 0 L-7 5 Z" transform="translate(639,338) rotate(90)"/>
+    <path d="M-7 -5 L0 0 L-7 5 Z" transform="translate(871,338) rotate(90)"/>
+  </g>
+  <text x="755" y="288" class="mono sspTxt sspC" font-size="12.5" text-anchor="middle">targetPort 5000</text>
+
+  <g class="sspD"><rect x="516" y="316" width="478" height="150" rx="14" class="sspEdgeD"/>
+    <rect x="662" y="306" width="186" height="20" rx="6" class="sspTagO"/>
+    <text x="755" y="320" class="sspTagOTxt" text-anchor="middle">SELECTOR MATCHES THESE</text></g>
+
+  <rect x="534" y="340" width="210" height="110" rx="12" class="fill-panel stroke-line"/>
+  <text x="639" y="372" class="lbl" text-anchor="middle">Pod</text>
+  <g class="sspD">
+    <rect x="556" y="386" width="166" height="26" rx="7" class="fill-panel"/>
+    <rect x="556" y="386" width="166" height="26" rx="7" class="sspEdge"/>
+    <text x="639" y="404" class="mono sspTxt" font-size="12" text-anchor="middle">app: hello</text>
+  </g>
+  <text x="639" y="434" class="mono sspTxt sspC" font-size="12.5" text-anchor="middle">listening on 5000</text>
+
+  <rect x="766" y="340" width="210" height="110" rx="12" class="fill-panel stroke-line"/>
+  <text x="871" y="372" class="lbl" text-anchor="middle">Pod</text>
+  <g class="sspD">
+    <rect x="788" y="386" width="166" height="26" rx="7" class="fill-panel"/>
+    <rect x="788" y="386" width="166" height="26" rx="7" class="sspEdge"/>
+    <text x="871" y="404" class="mono sspTxt" font-size="12" text-anchor="middle">app: hello</text>
+  </g>
+  <text x="871" y="434" class="mono sspTxt sspC" font-size="12.5" text-anchor="middle">listening on 5000</text>
+</svg>
+<div class="callout">A Service names <strong>no Pod at all</strong>. It states a label query &mdash; whatever matches, now or in ten minutes, is a backend.</div>
+<div class="ref"><a href="https://kubernetes.io/docs/concepts/services-networking/service/" target="_blank" rel="noopener">Service</a></div>
+<div class="notes">Same object on both sides &mdash; walk a frame, then point at what it drew. apiVersion/kind (teal) says which API type, so the box on the right is a Service. metadata (violet) is the name, and this name is the thing a caller types &mdash; the next slide is entirely about it. spec (amber) is what you want: a ClusterIP, so one virtual IP that only works from inside, and the port mapping. The two frames inside spec are the two questions every Service answers. <strong>selector</strong> (pink) &mdash; which Pods? Not by name: by label. Point at the pink chips on the two Pods, then at the pink frame in the YAML; a third Pod with <code>app: hello</code> joins with no edit to this file, and that is the whole trick. <strong>ports</strong> (amber) &mdash; which port where? <code>port</code> is the Service's own door, <code>targetPort</code> is the container's. They differ here on purpose (80 &rarr; 5000) so the two never blur; mixing them up is the Session 4 bug. Note <code>- port</code> is a list item, same dash as the Pod's containers list on Session 2 slide 9. Two things they will get wrong if you do not say them: a selector that matches nothing is <em>accepted silently</em> &mdash; no error, just zero endpoints and a connection refused, which is what <code>kubectl get endpoints hello-svc</code> is for; and <code>targetPort</code> must be the port the app actually listens on, 5000 for our Flask image, not 80.</div>
+</section>
+
+<!-- deck order: the DNS/names slide (marker 5) deliberately precedes the
+     Service-types slide (marker 4). Markers keep their original identity so that
+     earlier notes and commits saying "S3 slide 4 = Service types" stay true. -->
+<!-- 5 -->
+<section class="slide">
+<h2>Services have names</h2>
+<svg class="dia" viewBox="0 0 1000 360" style="max-height:42vh" role="img" aria-label="Two coloured namespace boxes. In the violet default namespace a frontend Pod calls the backend Service by its short name, and the Service spreads traffic to two backend Pods. From one of those backend Pods an arrow leaves the default namespace, crosses into the teal data namespace and reaches the postgres Service, labelled postgres.data.">
+  <style>
+    svg.dia .nsqDef{--c:#7c3aed}svg.dia .nsqDat{--c:#0f766e}
+    svg.dia .nsqNs{fill:none;stroke:var(--c);stroke-width:2;stroke-dasharray:7 5}
+    svg.dia .nsqTag{fill:var(--c)}
+    svg.dia .nsqTagTxt{font-size:11.5px;font-weight:700;fill:var(--bg);letter-spacing:.05em}
+    svg.dia .nsqFlow{fill:none;stroke:var(--accent);stroke-width:2}
+    @media (prefers-color-scheme: dark){
+      svg.dia .nsqDef{--c:#a78bfa}svg.dia .nsqDat{--c:#4dd0bd}
+    }
+  </style>
+
+  <g class="nsqDef">
+    <rect x="24" y="56" width="560" height="250" rx="16" class="nsqNs"/>
+    <rect x="48" y="46" width="186" height="22" rx="7" class="nsqTag"/>
+    <text x="141" y="61" class="nsqTagTxt" text-anchor="middle">NAMESPACE: DEFAULT</text>
+  </g>
+  <g class="nsqDat">
+    <rect x="620" y="56" width="356" height="250" rx="16" class="nsqNs"/>
+    <rect x="644" y="46" width="160" height="22" rx="7" class="nsqTag"/>
+    <text x="724" y="61" class="nsqTagTxt" text-anchor="middle">NAMESPACE: DATA</text>
+  </g>
+
+  <rect x="48" y="104" width="136" height="68" rx="12" class="fill-panel stroke-line"/>
+  <text x="116" y="132" class="lbl" text-anchor="middle">Pod</text>
+  <text x="116" y="154" class="mono sm" text-anchor="middle">frontend</text>
+
+  <rect x="228" y="104" width="150" height="68" rx="12" class="fill-soft stroke-accent"/>
+  <text x="303" y="132" class="lbl accent-txt" text-anchor="middle">Service</text>
+  <text x="303" y="154" class="mono sm" text-anchor="middle">backend</text>
+
+  <rect x="424" y="86" width="136" height="48" rx="10" class="fill-panel stroke-line"/>
+  <text x="492" y="116" class="mono sm" text-anchor="middle">backend Pod</text>
+  <rect x="424" y="150" width="136" height="48" rx="10" class="fill-panel stroke-line"/>
+  <text x="492" y="180" class="mono sm" text-anchor="middle">backend Pod</text>
+
+  <path d="M192 138 H220" class="nsqFlow"/>
+  <path d="M216 130 l14 8 l-14 8 z" fill="var(--accent)"/>
+  <g class="nsqFlow"><path d="M382 126 L414 110"/><path d="M382 152 L414 172"/></g>
+  <path d="M410 103 l12 6 l-12 8 z" fill="var(--accent)"/>
+  <path d="M410 180 l2 -14 l10 10 z" fill="var(--accent)"/>
+
+  <text x="303" y="224" class="mono ok-txt" font-size="13" text-anchor="middle">backend:5000</text>
+  <text x="303" y="244" class="tiny" text-anchor="middle">same namespace &mdash; the short name is enough</text>
+
+  <rect x="676" y="104" width="240" height="68" rx="12" class="fill-soft stroke-accent"/>
+  <text x="796" y="132" class="lbl accent-txt" text-anchor="middle">Service</text>
+  <text x="796" y="154" class="mono sm" text-anchor="middle">postgres</text>
+
+  <path d="M492 198 V272 H796 V182" class="nsqFlow"/>
+  <path d="M788 186 l8 -14 l8 14 z" fill="var(--accent)"/>
+  <rect x="556" y="250" width="176" height="22" rx="7" class="fill-panel"/>
+  <text x="644" y="266" class="mono ok-txt" font-size="13" text-anchor="middle">postgres.data:5432</text>
+
+  <text x="500" y="340" class="tiny bad-txt" text-anchor="middle">from <tspan class="mono" font-size="12">default</tspan>, plain <tspan class="mono" font-size="12">postgres</tspan> resolves to nothing &mdash; a short name only reaches its own namespace</text>
+</svg>
+<pre class="big"><code>backend                            <span class="muted"># same namespace — all you need</span>
+backend.default                    <span class="muted"># &lt;service&gt;.&lt;namespace&gt;</span>
+backend.default.svc.cluster.local  <span class="muted"># the full name</span></code></pre>
+<p class="punch">Nothing to install. <em>Name the Service well &mdash; that name is your endpoint.</em></p>
+<div class="ref"><a href="https://kubernetes.io/docs/concepts/services-networking/dns-pod-service/" target="_blank" rel="noopener">DNS for Services and Pods</a></div>
+<div class="notes">Trace the picture, do not list it. Inside <code>default</code> (violet) the frontend Pod dials <code>backend:5000</code> — a bare hostname, no IP, no config — and the backend Service spreads that across its two Pods. Then the interesting hop: <strong>one of those backend Pods</strong> is the thing that needs the database, and the database lives in another namespace, so the arrow leaves the violet box and enters the teal one. That crossing is the whole slide: the moment you leave your namespace the short name stops working and you must say <code>postgres.data</code>. A namespace is a naming boundary before it is anything else — the Session 2 callback, one sentence is enough. Every Service gets its DNS record automatically: nothing to install, no service discovery to configure, no restart when Pods change. The three forms below are the same record at three levels of qualification; students only ever type the first two. In the capstone their frontend calls <code>http://backend:5000</code> and it simply works — call it out when it happens. Worth saying out loud: nothing here stops a cross-namespace call, DNS resolves it happily. Blocking it is a NetworkPolicy job, which is Session 4.</div>
+</section>
+
+<!-- 4 -->
+<section class="slide">
+<h2>Three ways to be reachable</h2>
+<svg class="dia" viewBox="0 0 1000 462" style="max-height:62vh" role="img" aria-label="Three columns, each showing traffic flowing top to bottom. ClusterIP: traffic from outside is blocked at the cluster edge, and only another Pod inside can reach the Service, which spreads traffic to the Pods. NodePort: the same picture plus a port on every node, opening a door through the cluster edge. LoadBalancer: the same again plus a load balancer created by your cloud provider, sitting outside the cluster and feeding the node ports.">
+  <style>
+    svg.dia .svC{--c:#0f766e}svg.dia .svN{--c:#b45309}svg.dia .svL{--c:#7c3aed}
+    svg.dia .svTint{fill:var(--c);opacity:.13}
+    svg.dia .svEdge{fill:none;stroke:var(--c);stroke-width:2}
+    svg.dia .svLbl{fill:var(--c);font-weight:700;font-size:15px}
+    svg.dia .svTitle{fill:var(--c);font-weight:700;font-size:19px}
+    @media (prefers-color-scheme: dark){
+      svg.dia .svC{--c:#4dd0bd}svg.dia .svN{--c:#f0b352}svg.dia .svL{--c:#a78bfa}
+    }
+  </style>
+
+
+  <!-- ===== ClusterIP ===== -->
+  <g class="svC">
+    <text x="169" y="26" class="svTitle" text-anchor="middle">ClusterIP</text>
+  </g>
+  <text x="169" y="46" class="tiny" text-anchor="middle">the default &mdash; you get this if you say nothing</text>
+  <rect x="79" y="58" width="180" height="30" rx="8" class="fill-panel stroke-line"/>
+  <text x="169" y="78" class="sm" text-anchor="middle">traffic from outside</text>
+  <path d="M169 90 V 140" class="stroke-bad nofill"/>
+  <path d="M158 149 l22 22 M180 149 l-22 22" class="stroke-bad nofill"/>
+  <rect x="14" y="170" width="310" height="244" rx="14" class="fill-panel stroke-line"/>
+  <text x="28" y="192" class="tiny">the cluster</text>
+  <text x="189" y="166" class="tiny bad-txt">no route in</text>
+  <rect x="74" y="202" width="190" height="44" rx="10" class="fill-soft stroke-accent dash"/>
+  <text x="169" y="222" class="sm accent-txt" text-anchor="middle">another Pod</text>
+  <text x="169" y="238" class="tiny" text-anchor="middle">e.g. your frontend</text>
+  <path d="M169 248 V 252" class="stroke-accent nofill"/>
+  <path d="M-6 -4 L0 0 L-6 4 Z" fill="var(--accent)" transform="translate(169,258) rotate(90)"/>
+  <g class="svC">
+    <rect x="44" y="262" width="250" height="52" rx="11" class="svTint"/>
+    <rect x="44" y="262" width="250" height="52" rx="11" class="svEdge"/>
+    <text x="169" y="285" class="svLbl" text-anchor="middle">Service</text>
+  </g>
+  <text x="169" y="303" class="tiny" text-anchor="middle"><tspan class="mono" font-size="11">10.96.0.12</tspan> &mdash; one stable IP</text>
+  <path d="M169 314 V 326 M99 326 H 239 M99 326 V 340 M239 326 V 340" class="stroke-accent nofill"/>
+  <path d="M-6 -4 L0 0 L-6 4 Z" fill="var(--accent)" transform="translate(99,346) rotate(90)"/>
+  <path d="M-6 -4 L0 0 L-6 4 Z" fill="var(--accent)" transform="translate(239,346) rotate(90)"/>
+  <rect x="34" y="350" width="130" height="46" rx="10" class="fill-soft stroke-accent dash"/>
+  <text x="99" y="378" class="sm accent-txt" text-anchor="middle">Pod</text>
+  <rect x="174" y="350" width="130" height="46" rx="10" class="fill-soft stroke-accent dash"/>
+  <text x="239" y="378" class="sm accent-txt" text-anchor="middle">Pod</text>
+  <text x="169" y="440" class="tiny" text-anchor="middle">internal only &mdash; databases, back-end APIs</text>
+
+  <!-- ===== NodePort ===== -->
+  <g class="svN">
+    <text x="500" y="26" class="svTitle" text-anchor="middle">NodePort</text>
+  </g>
+  <text x="500" y="46" class="tiny" text-anchor="middle">ClusterIP <tspan font-weight="700">+</tspan> a port on every node</text>
+  <rect x="410" y="58" width="180" height="30" rx="8" class="fill-panel stroke-line"/>
+  <text x="500" y="78" class="sm" text-anchor="middle">traffic from outside</text>
+  <path d="M500 90 V 148" class="stroke-accent nofill"/>
+  <path d="M-6 -4 L0 0 L-6 4 Z" fill="var(--accent)" transform="translate(500,154) rotate(90)"/>
+  <rect x="345" y="170" width="310" height="244" rx="14" class="fill-panel stroke-line"/>
+  <text x="359" y="192" class="tiny">the cluster</text>
+  <g class="svN">
+    <rect x="400" y="158" width="200" height="26" rx="8" class="fill-panel"/>
+    <rect x="400" y="158" width="200" height="26" rx="8" class="svTint"/>
+    <rect x="400" y="158" width="200" height="26" rx="8" class="svEdge"/>
+  </g>
+  <text x="500" y="176" class="mono" font-size="11" text-anchor="middle">&lt;node-ip&gt;:30080</text>
+  <text x="500" y="214" class="tiny" text-anchor="middle">a door on <tspan font-weight="700">every</tspan> node</text>
+  <path d="M500 224 V 252" class="stroke-accent nofill"/>
+  <path d="M-6 -4 L0 0 L-6 4 Z" fill="var(--accent)" transform="translate(500,258) rotate(90)"/>
+  <g class="svN">
+    <rect x="375" y="262" width="250" height="52" rx="11" class="svTint"/>
+    <rect x="375" y="262" width="250" height="52" rx="11" class="svEdge"/>
+    <text x="500" y="285" class="svLbl" text-anchor="middle">Service</text>
+  </g>
+  <text x="500" y="303" class="tiny" text-anchor="middle">still has its ClusterIP</text>
+  <path d="M500 314 V 326 M430 326 H 570 M430 326 V 340 M570 326 V 340" class="stroke-accent nofill"/>
+  <path d="M-6 -4 L0 0 L-6 4 Z" fill="var(--accent)" transform="translate(430,346) rotate(90)"/>
+  <path d="M-6 -4 L0 0 L-6 4 Z" fill="var(--accent)" transform="translate(570,346) rotate(90)"/>
+  <rect x="365" y="350" width="130" height="46" rx="10" class="fill-soft stroke-accent dash"/>
+  <text x="430" y="378" class="sm accent-txt" text-anchor="middle">Pod</text>
+  <rect x="505" y="350" width="130" height="46" rx="10" class="fill-soft stroke-accent dash"/>
+  <text x="570" y="378" class="sm accent-txt" text-anchor="middle">Pod</text>
+  <text x="500" y="440" class="tiny" text-anchor="middle">demos and local clusters &mdash; what we use today</text>
+
+  <!-- ===== LoadBalancer ===== -->
+  <g class="svL">
+    <text x="831" y="26" class="svTitle" text-anchor="middle">LoadBalancer</text>
+  </g>
+  <text x="831" y="46" class="tiny" text-anchor="middle">NodePort <tspan font-weight="700">+</tspan> a load balancer in your cloud</text>
+  <rect x="741" y="58" width="180" height="30" rx="8" class="fill-panel stroke-line"/>
+  <text x="831" y="78" class="sm" text-anchor="middle">traffic from outside</text>
+  <path d="M831 90 V 96" class="stroke-accent nofill"/>
+  <path d="M-6 -4 L0 0 L-6 4 Z" fill="var(--accent)" transform="translate(831,102) rotate(90)"/>
+  <g class="svL">
+    <rect x="706" y="104" width="250" height="46" rx="11" class="svTint"/>
+    <rect x="706" y="104" width="250" height="46" rx="11" class="svEdge"/>
+    <text x="831" y="125" class="svLbl" text-anchor="middle">load balancer</text>
+  </g>
+  <text x="831" y="142" class="tiny" text-anchor="middle">your cloud creates it &middot; one real public IP</text>
+  <path d="M831 150 V 150" class="stroke-accent nofill"/>
+  <rect x="676" y="170" width="310" height="244" rx="14" class="fill-panel stroke-line"/>
+  <text x="690" y="192" class="tiny">the cluster</text>
+  <g class="svN">
+    <rect x="731" y="158" width="200" height="26" rx="8" class="fill-panel"/>
+    <rect x="731" y="158" width="200" height="26" rx="8" class="svTint"/>
+    <rect x="731" y="158" width="200" height="26" rx="8" class="svEdge"/>
+  </g>
+  <text x="831" y="176" class="mono" font-size="11" text-anchor="middle">&lt;node-ip&gt;:30080</text>
+  <text x="831" y="214" class="tiny" text-anchor="middle">a door on <tspan font-weight="700">every</tspan> node</text>
+  <path d="M831 224 V 252" class="stroke-accent nofill"/>
+  <path d="M-6 -4 L0 0 L-6 4 Z" fill="var(--accent)" transform="translate(831,258) rotate(90)"/>
+  <g class="svL">
+    <rect x="706" y="262" width="250" height="52" rx="11" class="svTint"/>
+    <rect x="706" y="262" width="250" height="52" rx="11" class="svEdge"/>
+    <text x="831" y="285" class="svLbl" text-anchor="middle">Service</text>
+  </g>
+  <text x="831" y="303" class="tiny" text-anchor="middle">still a NodePort, still a ClusterIP</text>
+  <path d="M831 314 V 326 M761 326 H 901 M761 326 V 340 M901 326 V 340" class="stroke-accent nofill"/>
+  <path d="M-6 -4 L0 0 L-6 4 Z" fill="var(--accent)" transform="translate(761,346) rotate(90)"/>
+  <path d="M-6 -4 L0 0 L-6 4 Z" fill="var(--accent)" transform="translate(901,346) rotate(90)"/>
+  <rect x="696" y="350" width="130" height="46" rx="10" class="fill-soft stroke-accent dash"/>
+  <text x="761" y="378" class="sm accent-txt" text-anchor="middle">Pod</text>
+  <rect x="836" y="350" width="130" height="46" rx="10" class="fill-soft stroke-accent dash"/>
+  <text x="901" y="378" class="sm accent-txt" text-anchor="middle">Pod</text>
+  <text x="831" y="440" class="tiny" text-anchor="middle">production on a cloud &mdash; it costs money</text>
+</svg>
+<div class="callout">They are not three alternatives &mdash; they are three <strong>layers</strong>. Ask for a LoadBalancer and you get a NodePort and a ClusterIP underneath it, whether you wanted them or not.</div>
+<div class="ref"><a href="https://kubernetes.io/docs/concepts/services-networking/service/" target="_blank" rel="noopener">Service</a></div>
+<div class="notes">Read the three columns left to right and watch the picture grow &mdash; that is the whole slide. Column 1: the arrow from outside stops at the wall. A ClusterIP is a virtual IP that exists only inside the cluster, so the only thing that can call it is another Pod; this is what you want for a database or a back-end API, and it is what you get by default when you write no `type:` at all. Column 2 adds one thing: the same Service also opens the same high-numbered port on <em>every</em> node, so `&lt;any-node-ip&gt;:30080` now reaches it. Column 3 adds one more: your cloud provider creates a real load balancer outside the cluster, gives it a public IP, and points it at those node ports. Land the callout hard &mdash; students reliably think these are three alternatives to choose between. They are layers: a LoadBalancer Service still has a node port and still has a ClusterIP, and `kubectl get svc` shows all of it. On kind there is no cloud, so a LoadBalancer Service sits at `EXTERNAL-IP: &lt;pending&gt;` forever &mdash; worth demoing for ten seconds so they recognise it later. NodePort is the one they use today.</div>
+</section>
+
+<!-- 6 -->
+<section class="slide">
+<h2>NodePort, concretely</h2>
+<svg class="dia" viewBox="0 0 1000 480" style="max-height:60vh" role="img" aria-label="Left: the full NodePort Service manifest in an editor, with the ports block framed and each of the three ports tagged in its own colour. Right: a request from the laptop entering the node on port 30080, handed to the Service on port 80, and delivered to the Pod on port 5000, with the Pod drawn inside the node.">
+  <style>
+    svg.dia .nptA{--c:#0f766e}svg.dia .nptB{--c:#7c3aed}svg.dia .nptC{--c:#b45309}svg.dia .nptD{--c:#be185d}
+    svg.dia .nptEdge{fill:none;stroke:var(--c);stroke-width:2}
+    svg.dia .nptTag{fill:var(--c)}
+    svg.dia .nptTagTxt{font-size:11.5px;font-weight:700;fill:var(--bg);letter-spacing:.05em}
+    svg.dia .nptKey{fill:var(--c);font-weight:700}
+    svg.dia .nptTxt{fill:var(--c)}
+    svg.dia .nptCluster{fill:none;stroke:var(--line);stroke-width:1.5;stroke-dasharray:6 5}
+    svg.dia .nptFlow{fill:none;stroke:var(--accent);stroke-width:2}
+    @media (prefers-color-scheme: dark){
+      svg.dia .nptA{--c:#4dd0bd}svg.dia .nptB{--c:#a78bfa}svg.dia .nptC{--c:#f0b352}svg.dia .nptD{--c:#f472b6}
+    }
+  </style>
+
+  <text x="16" y="42" class="sm">the manifest&hellip;</text>
+  <text x="984" y="42" class="sm" text-anchor="end">&hellip;and the path one request takes</text>
+
+  <rect x="16" y="56" width="470" height="360" rx="10" class="stroke-line" fill="var(--code-bg)"/>
+  <path d="M16 90 H486" class="stroke-line nofill"/>
+  <circle cx="38" cy="73" r="5" class="fill-panel stroke-line"/>
+  <circle cx="56" cy="73" r="5" class="fill-panel stroke-line"/>
+  <circle cx="74" cy="73" r="5" class="fill-panel stroke-line"/>
+  <text x="96" y="78" class="sm">service-nodeport.yaml</text>
+  <path d="M68 90 V416" class="stroke-line nofill"/>
+
+  <g class="nptB"><rect x="80" y="303" width="384" height="99" rx="9" class="nptEdge"/>
+    <rect x="406" y="293" width="58" height="20" rx="6" class="nptTag"/>
+    <text x="435" y="307" class="nptTagTxt" text-anchor="middle">PORTS</text></g>
+
+  <text x="58" y="128" class="tiny" text-anchor="end">1</text>
+  <text x="106" y="128" class="mono" font-size="13">apiVersion: v1</text>
+  <text x="58" y="152" class="tiny" text-anchor="end">2</text>
+  <text x="106" y="152" class="mono" font-size="13">kind: Service</text>
+  <text x="58" y="176" class="tiny" text-anchor="end">3</text>
+  <text x="106" y="176" class="mono" font-size="13">metadata:</text>
+  <text x="58" y="200" class="tiny" text-anchor="end">4</text>
+  <text x="122" y="200" class="mono" font-size="13">name: hello-nodeport</text>
+  <text x="58" y="224" class="tiny" text-anchor="end">5</text>
+  <text x="106" y="224" class="mono" font-size="13">spec:</text>
+  <text x="58" y="248" class="tiny" text-anchor="end">6</text>
+  <text x="122" y="248" class="mono" font-size="13">type: <tspan class="nptKey nptC">NodePort</tspan></text>
+  <text x="58" y="272" class="tiny" text-anchor="end">7</text>
+  <text x="122" y="272" class="mono" font-size="13">selector:</text>
+  <text x="58" y="296" class="tiny" text-anchor="end">8</text>
+  <text x="138" y="296" class="mono" font-size="13">app: hello</text>
+  <text x="58" y="320" class="tiny" text-anchor="end">9</text>
+  <text x="122" y="320" class="mono" font-size="13">ports:</text>
+  <text x="58" y="344" class="tiny" text-anchor="end">10</text>
+  <text x="138" y="344" class="mono" font-size="13">- <tspan class="nptKey nptD">port</tspan>: 80</text>
+  <text x="58" y="368" class="tiny" text-anchor="end">11</text>
+  <text x="154" y="368" class="mono" font-size="13"><tspan class="nptKey nptA">targetPort</tspan>: 5000</text>
+  <text x="58" y="392" class="tiny" text-anchor="end">12</text>
+  <text x="154" y="392" class="mono" font-size="13"><tspan class="nptKey nptC">nodePort</tspan>: 30080</text>
+
+  <g class="nptD"><rect x="306" y="332" width="78" height="20" rx="6" class="nptTag"/>
+    <text x="345" y="346" class="nptTagTxt" text-anchor="middle">SERVICE</text></g>
+  <g class="nptA"><rect x="306" y="356" width="94" height="20" rx="6" class="nptTag"/>
+    <text x="353" y="370" class="nptTagTxt" text-anchor="middle">CONTAINER</text></g>
+  <g class="nptC"><rect x="306" y="380" width="58" height="20" rx="6" class="nptTag"/>
+    <text x="335" y="394" class="nptTagTxt" text-anchor="middle">NODE</text></g>
+
+  <rect x="600" y="56" width="310" height="66" rx="12" class="fill-panel stroke-line"/>
+  <text x="755" y="84" class="lbl" text-anchor="middle">your laptop</text>
+  <text x="755" y="108" class="mono sm" text-anchor="middle">curl http://localhost:30080</text>
+
+  <path d="M755 124 V190" class="nptFlow"/>
+  <path d="M747 186 l8 14 l8 -14 z" fill="var(--accent)"/>
+
+  <rect x="530" y="168" width="450" height="292" rx="16" class="nptCluster"/>
+  <rect x="548" y="158" width="86" height="20" rx="6" class="fill-panel stroke-line"/>
+  <text x="591" y="172" class="tiny" text-anchor="middle">cluster</text>
+
+  <rect x="556" y="212" width="398" height="236" rx="14" class="fill-panel stroke-line"/>
+  <text x="576" y="252" class="sm">node &nbsp;<tspan class="mono">k8s101-worker</tspan></text>
+  <text x="576" y="270" class="tiny">(every node opens :30080)</text>
+
+  <g class="nptC"><rect x="640" y="200" width="230" height="26" rx="8" class="nptTag"/>
+    <text x="755" y="218" class="nptTagTxt" text-anchor="middle">&lt;NODE-IP&gt;:30080</text></g>
+
+  <path d="M755 230 V266" class="nptFlow"/>
+  <path d="M747 262 l8 14 l8 -14 z" fill="var(--accent)"/>
+
+  <g class="nptD">
+    <rect x="600" y="276" width="310" height="58" rx="12" class="fill-panel"/>
+    <rect x="600" y="276" width="310" height="58" rx="12" class="nptEdge"/>
+    <text x="755" y="300" class="lbl nptTxt" text-anchor="middle">Service &nbsp;hello-nodeport</text>
+    <text x="755" y="322" class="mono nptTxt" font-size="12.5" text-anchor="middle">port 80</text>
+  </g>
+
+  <path d="M755 338 V370" class="nptFlow"/>
+  <path d="M747 366 l8 14 l8 -14 z" fill="var(--accent)"/>
+
+  <g class="nptA">
+    <rect x="600" y="380" width="310" height="58" rx="12" class="fill-panel"/>
+    <rect x="600" y="380" width="310" height="58" rx="12" class="nptEdge"/>
+    <text x="755" y="404" class="lbl nptTxt" text-anchor="middle">Pod &nbsp;hello-deploy-&hellip;</text>
+    <text x="755" y="426" class="mono nptTxt" font-size="12.5" text-anchor="middle">targetPort 5000</text>
+  </g>
+</svg>
+<div class="callout warn">Fine for learning, <strong>terrible for production</strong>: one arbitrary high port per service, no TLS, no routing.</div>
+<div class="notes">One request, three ports, three colours — read the tags in the YAML, then follow the same colours down the right-hand side. <strong>nodePort 30080</strong> (amber) is the door in the side of the node; the request arrives there. <strong>port 80</strong> (pink) is the Service’s own port, what it answers on once you are inside. <strong>targetPort 5000</strong> (teal) is the port the container is actually listening on — our Flask image. Three numbers, three different things, and a NodePort Service is the only place you see all three at once; that is why this slide exists. Two facts to say out loud. (1) <strong>Every node opens the node port</strong>, not just the one running the Pod — hit any node IP on 30080 and kube-proxy forwards it, which is why the picture draws the Pod inside the node but the chip says this node is not special. (2) <code>curl http://localhost:30080</code> works from the laptop only because <code>docs/kind-config.yaml</code> maps host 30080 onto the kind node container — on a real cluster you would use a node’s IP. Valid nodePort range is <strong>30000–32767</strong>; omit the field and Kubernetes picks one for you, which is why Lab 1 pins it. Real clusters use an Ingress or a LoadBalancer instead — next slide.</div>
+</section>
+
+<!-- 6b -->
+<section class="slide">
+<h2>LoadBalancer, concretely</h2>
+<svg class="dia" viewBox="0 0 1000 500" style="max-height:62vh" role="img" aria-label="Left: the LoadBalancer Service manifest in an editor, with type LoadBalancer, port 80 and targetPort 5000 each tagged in its own colour, and a greyed ghost line showing the nodePort Kubernetes allocates for you. Right: traffic from the internet reaches a cloud load balancer outside the cluster, which spreads it across the node ports of both nodes; inside, the one cluster-wide ClusterIP Service spans both nodes and delivers to a Pod on each.">
+  <style>
+    svg.dia .lbA{--c:#0f766e}svg.dia .lbB{--c:#7c3aed}svg.dia .lbC{--c:#b45309}svg.dia .lbD{--c:#be185d}
+    svg.dia .lbEdge{fill:none;stroke:var(--c);stroke-width:2}
+    svg.dia .lbEdgeD{fill:none;stroke:var(--c);stroke-width:1.5;stroke-dasharray:5 4}
+    svg.dia .lbTag{fill:var(--c)}
+    svg.dia .lbTagTxt{font-size:11.5px;font-weight:700;fill:var(--bg);letter-spacing:.05em}
+    svg.dia .lbTagO{fill:var(--code-bg);stroke:var(--c);stroke-width:1.5}
+    svg.dia .lbTagOTxt{font-size:11.5px;font-weight:700;fill:var(--c);letter-spacing:.05em}
+    svg.dia .lbKey{fill:var(--c);font-weight:700}
+    svg.dia .lbTxt{fill:var(--c)}
+    svg.dia .lbCluster{fill:none;stroke:var(--line);stroke-width:1.5;stroke-dasharray:6 5}
+    svg.dia .lbFlow{fill:none;stroke:var(--accent);stroke-width:2}
+    @media (prefers-color-scheme: dark){
+      svg.dia .lbA{--c:#4dd0bd}svg.dia .lbB{--c:#a78bfa}svg.dia .lbC{--c:#f0b352}svg.dia .lbD{--c:#f472b6}
+    }
+  </style>
+
+  <text x="16" y="42" class="sm">the manifest&hellip;</text>
+  <text x="984" y="42" class="sm" text-anchor="end">&hellip;and what the cloud builds for you</text>
+
+  <rect x="16" y="56" width="400" height="386" rx="10" class="stroke-line" fill="var(--code-bg)"/>
+  <path d="M16 90 H416" class="stroke-line nofill"/>
+  <circle cx="38" cy="73" r="5" class="fill-panel stroke-line"/>
+  <circle cx="56" cy="73" r="5" class="fill-panel stroke-line"/>
+  <circle cx="74" cy="73" r="5" class="fill-panel stroke-line"/>
+  <text x="96" y="78" class="sm">service-lb.yaml</text>
+  <path d="M68 90 V442" class="stroke-line nofill"/>
+
+  <text x="58" y="128" class="tiny" text-anchor="end">1</text>
+  <text x="106" y="128" class="mono" font-size="13">apiVersion: v1</text>
+  <text x="58" y="152" class="tiny" text-anchor="end">2</text>
+  <text x="106" y="152" class="mono" font-size="13">kind: Service</text>
+  <text x="58" y="176" class="tiny" text-anchor="end">3</text>
+  <text x="106" y="176" class="mono" font-size="13">metadata:</text>
+  <text x="58" y="200" class="tiny" text-anchor="end">4</text>
+  <text x="122" y="200" class="mono" font-size="13">name: hello-lb</text>
+  <text x="58" y="224" class="tiny" text-anchor="end">5</text>
+  <text x="106" y="224" class="mono" font-size="13">spec:</text>
+  <text x="58" y="248" class="tiny" text-anchor="end">6</text>
+  <text x="122" y="248" class="mono" font-size="13">type: <tspan class="lbKey lbB">LoadBalancer</tspan></text>
+  <text x="58" y="272" class="tiny" text-anchor="end">7</text>
+  <text x="122" y="272" class="mono" font-size="13">selector:</text>
+  <text x="58" y="296" class="tiny" text-anchor="end">8</text>
+  <text x="138" y="296" class="mono" font-size="13">app: hello</text>
+  <text x="58" y="320" class="tiny" text-anchor="end">9</text>
+  <text x="122" y="320" class="mono" font-size="13">ports:</text>
+  <text x="58" y="344" class="tiny" text-anchor="end">10</text>
+  <text x="138" y="344" class="mono" font-size="13">- <tspan class="lbKey lbD">port</tspan>: 80</text>
+  <text x="58" y="368" class="tiny" text-anchor="end">11</text>
+  <text x="154" y="368" class="mono" font-size="13"><tspan class="lbKey lbA">targetPort</tspan>: 5000</text>
+
+  <g class="lbB"><rect x="290" y="236" width="82" height="20" rx="6" class="lbTag"/>
+    <text x="331" y="250" class="lbTagTxt" text-anchor="middle">CLOUD LB</text></g>
+  <g class="lbD"><rect x="290" y="332" width="78" height="20" rx="6" class="lbTag"/>
+    <text x="329" y="346" class="lbTagTxt" text-anchor="middle">SERVICE</text></g>
+  <g class="lbA"><rect x="290" y="356" width="94" height="20" rx="6" class="lbTag"/>
+    <text x="337" y="370" class="lbTagTxt" text-anchor="middle">CONTAINER</text></g>
+
+  <g class="lbC"><rect x="96" y="392" width="286" height="38" rx="8" class="lbEdgeD"/>
+    <rect x="266" y="382" width="116" height="20" rx="6" class="lbTagO"/>
+    <text x="324" y="396" class="lbTagOTxt" text-anchor="middle">NODE &mdash; AUTO</text></g>
+  <text x="112" y="418" class="mono lbTxt lbC" font-size="13">nodePort: 31274</text>
+  <text x="248" y="418" class="tiny">you never write it</text>
+
+  <rect x="612" y="56" width="200" height="44" rx="10" class="fill-panel stroke-line"/>
+  <text x="712" y="84" class="lbl" text-anchor="middle">internet</text>
+
+  <path d="M712 102 V110" class="lbFlow"/>
+  <path d="M704 108 l8 14 l8 -14 z" fill="var(--accent)"/>
+
+  <g class="lbB">
+    <rect x="532" y="124" width="360" height="82" rx="12" class="fill-panel"/>
+    <rect x="532" y="124" width="360" height="82" rx="12" class="lbEdge"/>
+    <text x="712" y="148" class="lbl lbTxt" text-anchor="middle">cloud load balancer</text>
+    <text x="712" y="170" class="mono lbTxt" font-size="12.5" text-anchor="middle">EXTERNAL-IP 203.0.113.10:80</text>
+    <text x="712" y="192" class="tiny" text-anchor="middle">built by your cloud provider &mdash; it lives <tspan font-style="italic">outside</tspan> the cluster</text>
+  </g>
+
+  <rect x="448" y="224" width="528" height="252" rx="16" class="lbCluster"/>
+  <rect x="466" y="214" width="86" height="20" rx="6" class="fill-panel stroke-line"/>
+  <text x="509" y="228" class="tiny" text-anchor="middle">cluster</text>
+
+  <g class="lbFlow"><path d="M640 210 L594 256"/><path d="M784 210 L830 256"/></g>
+  <path d="M588 266 l1 -17 l11 6 z" fill="var(--accent)"/>
+  <path d="M836 266 l-1 -17 l-11 6 z" fill="var(--accent)"/>
+
+  <rect x="470" y="282" width="236" height="178" rx="12" class="fill-panel stroke-line"/>
+  <rect x="718" y="282" width="236" height="178" rx="12" class="fill-panel stroke-line"/>
+  <text x="482" y="322" class="sm">node 1</text>
+  <text x="730" y="322" class="sm">node 2</text>
+
+  <g class="lbC"><rect x="510" y="270" width="156" height="24" rx="7" class="lbTag"/>
+    <text x="588" y="287" class="lbTagTxt" text-anchor="middle">:31274</text>
+    <rect x="758" y="270" width="156" height="24" rx="7" class="lbTag"/>
+    <text x="836" y="287" class="lbTagTxt" text-anchor="middle">:31274</text></g>
+
+  <g class="lbFlow"><path d="M588 296 V336"/><path d="M836 296 V336"/></g>
+  <path d="M580 334 l8 14 l8 -14 z" fill="var(--accent)"/>
+  <path d="M828 334 l8 14 l8 -14 z" fill="var(--accent)"/>
+
+  <g class="lbD">
+    <rect x="466" y="350" width="492" height="46" rx="11" class="fill-panel"/>
+    <rect x="466" y="350" width="492" height="46" rx="11" class="lbEdge"/>
+    <text x="712" y="368" class="mono lbTxt" font-size="13" text-anchor="middle">Service hello-lb &mdash; ClusterIP 10.96.0.14:80</text>
+    <text x="712" y="388" class="tiny lbTxt" text-anchor="middle">one Service for the whole cluster, not one per node</text>
+  </g>
+
+  <g class="lbFlow"><path d="M588 398 V410"/><path d="M836 398 V410"/></g>
+  <path d="M580 408 l8 14 l8 -14 z" fill="var(--accent)"/>
+  <path d="M828 408 l8 14 l8 -14 z" fill="var(--accent)"/>
+
+  <g class="lbA">
+    <rect x="500" y="422" width="176" height="30" rx="9" class="fill-panel"/>
+    <rect x="500" y="422" width="176" height="30" rx="9" class="lbEdge"/>
+    <text x="588" y="442" class="mono lbTxt" font-size="12.5" text-anchor="middle">Pod :5000</text>
+    <rect x="748" y="422" width="176" height="30" rx="9" class="fill-panel"/>
+    <rect x="748" y="422" width="176" height="30" rx="9" class="lbEdge"/>
+    <text x="836" y="442" class="mono lbTxt" font-size="12.5" text-anchor="middle">Pod :5000</text>
+  </g>
+</svg>
+<div class="callout warn">No cloud, no load balancer. On kind or k3d <code>EXTERNAL-IP</code> stays <code>&lt;pending&gt;</code> for ever &mdash; the node port still works, so you fall back to <code>localhost:30080</code>.</div>
+<div class="ref"><a href="https://kubernetes.io/docs/concepts/services-networking/service/" target="_blank" rel="noopener">Service</a></div>
+<div class="notes">One line changed from the last slide &mdash; <code>type: LoadBalancer</code> &mdash; and four things now exist. Walk the picture top down. The <strong>cloud load balancer</strong> (violet) is built by your cloud provider when you apply this file; it is <em>not</em> a Kubernetes object running in the cluster, which is why the box sits outside the dashed line and why there is nothing to install. Its address is what <code>kubectl get svc</code> finally shows under <code>EXTERNAL-IP</code>. It spreads traffic across <strong>every node&rsquo;s node port</strong> (amber) &mdash; the same 30000&ndash;32767 mechanism as the previous slide, except you did not write the number: Kubernetes allocated it, which is what the greyed ghost line in the editor is showing. From there the <strong>one cluster-wide ClusterIP Service</strong> (pink) takes over; draw their eye along the band crossing both nodes and say it out loud, because the commonest wrong mental model is one Service per node. Then the selector picks the Pods and the container port (teal) ends the journey. The payload of the slide: <strong>a LoadBalancer Service contains a NodePort Service, which contains a ClusterIP Service</strong> &mdash; exactly the three-column picture from the Service types slide, now shown as one continuous path. That is why the node-port chip is the same amber chip here, there and on the NodePort slide. Finally, the honest caveat: on kind or k3d nobody creates the external load balancer, so <code>EXTERNAL-IP</code> hangs at <code>&lt;pending&gt;</code> &mdash; the Service is not broken, you just reach it the NodePort way. Say the cost too: one cloud load balancer per Service, each one billed, which is the argument for an Ingress on the next slide.</div>
+</section>
+
+<!-- 7 -->
+<section class="slide">
+<h2>Ingress, in one picture</h2>
+<svg class="dia" viewBox="0 0 1000 546" style="max-height:62vh" role="img" aria-label="Left: an Ingress manifest with ingressClassName framed amber and two path rules framed violet and teal. Right: a request arriving from the internet at the ingress controller, matching the host, and splitting down two coloured paths — slash to the frontend Service on port 80, slash api to the backend Service on port 5000.">
+  <style>
+    svg.dia .ingA{--c:#b45309}svg.dia .ingB{--c:#7c3aed}svg.dia .ingC{--c:#0f766e}
+    svg.dia .ingEdge{fill:none;stroke:var(--c);stroke-width:2}
+    svg.dia .ingLine{fill:none;stroke:var(--c);stroke-width:2.5}
+    svg.dia .ingTag{fill:var(--c)}
+    svg.dia .ingTagTxt{font-size:11px;font-weight:700;fill:var(--bg);letter-spacing:.05em}
+    svg.dia .ingKey{fill:var(--c);font-weight:700}
+    svg.dia .ingVal{fill:var(--c);font-weight:700}
+    svg.dia .ingTxt{fill:var(--c)}
+    svg.dia .ingFlow{fill:none;stroke:var(--accent);stroke-width:2}
+    @media (prefers-color-scheme: dark){
+      svg.dia .ingA{--c:#f0b352}svg.dia .ingB{--c:#a78bfa}svg.dia .ingC{--c:#4dd0bd}
+    }
+  </style>
+
+  <text x="16" y="36" class="sm">the rules you write&hellip;</text>
+  <text x="984" y="36" class="sm" text-anchor="end">&hellip;and what the controller does with them</text>
+
+  <rect x="16" y="52" width="582" height="472" rx="10" class="stroke-line" fill="var(--code-bg)"/>
+  <path d="M16 84 H598" class="stroke-line nofill"/>
+  <circle cx="38" cy="68" r="5" class="fill-panel stroke-line"/>
+  <circle cx="56" cy="68" r="5" class="fill-panel stroke-line"/>
+  <circle cx="74" cy="68" r="5" class="fill-panel stroke-line"/>
+  <text x="96" y="73" class="sm">ingress.yaml</text>
+  <path d="M68 84 V524" class="stroke-line nofill"/>
+
+  <g class="ingA"><rect x="80" y="211" width="496" height="26" rx="8" class="ingEdge"/>
+    <rect x="438" y="201" width="138" height="20" rx="6" class="ingTag"/>
+    <text x="507" y="215" class="ingTagTxt" text-anchor="middle">WHICH CONTROLLER</text></g>
+  <g class="ingB"><rect x="80" y="316" width="496" height="89" rx="9" class="ingEdge"/>
+    <rect x="462" y="306" width="114" height="20" rx="6" class="ingTag"/>
+    <text x="519" y="320" class="ingTagTxt" text-anchor="middle">ROUTE 1 &mdash; /</text></g>
+  <g class="ingC"><rect x="80" y="421" width="496" height="89" rx="9" class="ingEdge"/>
+    <rect x="444" y="411" width="132" height="20" rx="6" class="ingTag"/>
+    <text x="510" y="425" class="ingTagTxt" text-anchor="middle">ROUTE 2 &mdash; /api</text></g>
+
+  <text x="58" y="122" class="tiny" text-anchor="end">1</text>
+  <text x="106" y="122" class="mono" font-size="12.5">apiVersion: networking.k8s.io/v1</text>
+  <text x="58" y="143" class="tiny" text-anchor="end">2</text>
+  <text x="106" y="143" class="mono" font-size="12.5">kind: Ingress</text>
+  <text x="58" y="164" class="tiny" text-anchor="end">3</text>
+  <text x="106" y="164" class="mono" font-size="12.5">metadata:</text>
+  <text x="58" y="185" class="tiny" text-anchor="end">4</text>
+  <text x="122" y="185" class="mono" font-size="12.5">name: shop</text>
+  <text x="58" y="206" class="tiny" text-anchor="end">5</text>
+  <text x="106" y="206" class="mono" font-size="12.5">spec:</text>
+  <text x="58" y="227" class="tiny" text-anchor="end">6</text>
+  <text x="122" y="227" class="mono" font-size="12.5"><tspan class="ingKey ingA">ingressClassName</tspan>: <tspan class="ingVal ingA">nginx</tspan></text>
+  <text x="58" y="248" class="tiny" text-anchor="end">7</text>
+  <text x="122" y="248" class="mono" font-size="12.5">rules:</text>
+  <text x="58" y="269" class="tiny" text-anchor="end">8</text>
+  <text x="138" y="269" class="mono" font-size="12.5">- host: shop.example.com</text>
+  <text x="58" y="290" class="tiny" text-anchor="end">9</text>
+  <text x="154" y="290" class="mono" font-size="12.5">http:</text>
+  <text x="58" y="311" class="tiny" text-anchor="end">10</text>
+  <text x="170" y="311" class="mono" font-size="12.5">paths:</text>
+  <text x="58" y="332" class="tiny" text-anchor="end">11</text>
+  <text x="186" y="332" class="mono" font-size="12.5">- <tspan class="ingKey ingB">path</tspan>: <tspan class="ingVal ingB">/</tspan></text>
+  <text x="58" y="353" class="tiny" text-anchor="end">12</text>
+  <text x="202" y="353" class="mono" font-size="12.5">pathType: Prefix</text>
+  <text x="58" y="374" class="tiny" text-anchor="end">13</text>
+  <text x="202" y="374" class="mono" font-size="12.5">backend:</text>
+  <text x="58" y="395" class="tiny" text-anchor="end">14</text>
+  <text x="218" y="395" class="mono" font-size="12.5">service: {name: <tspan class="ingVal ingB">frontend</tspan>, port: {number: 80}}</text>
+  <text x="58" y="416" class="tiny" text-anchor="end">15</text>
+  <text x="58" y="437" class="tiny" text-anchor="end">16</text>
+  <text x="186" y="437" class="mono" font-size="12.5">- <tspan class="ingKey ingC">path</tspan>: <tspan class="ingVal ingC">/api</tspan></text>
+  <text x="58" y="458" class="tiny" text-anchor="end">17</text>
+  <text x="202" y="458" class="mono" font-size="12.5">pathType: Prefix</text>
+  <text x="58" y="479" class="tiny" text-anchor="end">18</text>
+  <text x="202" y="479" class="mono" font-size="12.5">backend:</text>
+  <text x="58" y="500" class="tiny" text-anchor="end">19</text>
+  <text x="218" y="500" class="mono" font-size="12.5">service: {name: <tspan class="ingVal ingC">backend</tspan>, port: {number: 5000}}</text>
+
+  <rect x="672" y="56" width="252" height="50" rx="12" class="fill-panel stroke-line"/>
+  <text x="798" y="78" class="lbl" text-anchor="middle">internet</text>
+  <text x="798" y="96" class="tiny" text-anchor="middle">https://shop.example.com</text>
+
+  <path d="M798 108 V132" class="ingFlow"/>
+  <path d="M790 130 l8 14 l8 -14 z" fill="var(--accent)"/>
+
+  <g class="ingA">
+    <rect x="620" y="144" width="356" height="72" rx="12" class="fill-panel"/>
+    <rect x="620" y="144" width="356" height="72" rx="12" class="ingEdge"/>
+    <text x="798" y="172" class="lbl ingTxt" font-size="14" text-anchor="middle">ingress controller</text>
+    <text x="798" y="194" class="tiny" text-anchor="middle">nginx &mdash; one entry point, TLS ends here</text>
+  </g>
+
+  <rect x="672" y="204" width="252" height="24" rx="7" class="fill-panel stroke-line"/>
+  <text x="798" y="221" class="mono" font-size="11.5" text-anchor="middle">host: shop.example.com &check;</text>
+
+  <g class="ingB ingLine"><path d="M770 234 L712 282"/></g>
+  <g class="ingB" fill="var(--c)"><path d="M-7 -5 L0 0 L-7 5 Z" transform="translate(705,288) rotate(140)"/></g>
+  <g class="ingC ingLine"><path d="M826 234 L884 282"/></g>
+  <g class="ingC" fill="var(--c)"><path d="M-7 -5 L0 0 L-7 5 Z" transform="translate(891,288) rotate(40)"/></g>
+
+  <g class="ingB">
+    <rect x="620" y="298" width="168" height="100" rx="12" class="fill-panel"/>
+    <rect x="620" y="298" width="168" height="100" rx="12" class="ingEdge"/>
+    <rect x="656" y="288" width="96" height="22" rx="7" class="ingTag"/>
+    <text x="704" y="304" class="ingTagTxt" text-anchor="middle">path: /</text>
+    <text x="704" y="340" class="lbl ingTxt" font-size="13" text-anchor="middle">Service</text>
+    <text x="704" y="362" class="mono" font-size="12.5" text-anchor="middle">frontend</text>
+    <text x="704" y="384" class="tiny ingTxt" text-anchor="middle">port 80</text>
+  </g>
+
+  <g class="ingC">
+    <rect x="808" y="298" width="168" height="100" rx="12" class="fill-panel"/>
+    <rect x="808" y="298" width="168" height="100" rx="12" class="ingEdge"/>
+    <rect x="834" y="288" width="116" height="22" rx="7" class="ingTag"/>
+    <text x="892" y="304" class="ingTagTxt" text-anchor="middle">path: /api</text>
+    <text x="892" y="340" class="lbl ingTxt" font-size="13" text-anchor="middle">Service</text>
+    <text x="892" y="362" class="mono" font-size="12.5" text-anchor="middle">backend</text>
+    <text x="892" y="384" class="tiny ingTxt" text-anchor="middle">port 5000</text>
+  </g>
+
+  <text x="798" y="432" class="sm" text-anchor="middle">one host, one IP, one certificate</text>
+  <text x="798" y="454" class="tiny" text-anchor="middle">&mdash; and the Services behind it stay plain ClusterIP</text>
+
+  <rect x="620" y="476" width="356" height="48" rx="12" class="fill-panel stroke-line"/>
+  <text x="798" y="496" class="tiny" text-anchor="middle">the Ingress is <tspan font-weight="700">only rules</tspan>. The controller is</text>
+  <text x="798" y="514" class="tiny" text-anchor="middle">the Pod that actually listens on :443.</text>
+</svg>
+<div class="callout warn">No controller installed &rarr; your Ingress <strong>does nothing at all</strong>. A classic first surprise.</div>
+<div class="ref"><a href="https://kubernetes.io/docs/concepts/services-networking/ingress/" target="_blank" rel="noopener">Ingress</a></div>
+<div class="notes">The same file on both sides &mdash; walk a frame, then the thing it draws. <strong>Amber, <code>ingressClassName</code></strong>: which controller should pick this up. That one line is the whole relationship between the object and the software &mdash; the Ingress is a piece of YAML sitting in etcd, and a controller is a Pod running in the cluster that watches for Ingresses addressed to it and reconfigures itself. Nothing happens without one, which is the callout and the classic first surprise: <code>kubectl get ingress</code> shows your object, <code>ADDRESS</code> stays empty for ever, and there is no error anywhere. Then the two routes, <strong>violet</strong> and <strong>teal</strong> &mdash; point at a frame in the YAML and then at the box it produced. Both match the same <code>host</code>, and the path decides which Service gets the request. Say what this replaces: the previous two slides gave every app its own port or its own cloud load balancer; here <strong>one host, one IP, one certificate</strong> fronts the whole shop, and the Services behind it go back to being plain ClusterIP &mdash; nothing externally reachable at all. Two details worth ten seconds each. <code>pathType: Prefix</code> is required and people forget it; <code>/</code> as a Prefix matches everything that is not matched more specifically, so <code>/api</code> wins for its own traffic. And the port here is the <strong>Service</strong>&rsquo;s port, not the container&rsquo;s &mdash; 80 for the frontend, 5000 for our Flask backend, exactly the <code>port</code> field from the Service slide. We are not configuring one today; Session 4 has it as a bonus lab.</div>
+</section>
+<!-- 7a -->
+<section class="slide">
+<h2>&hellip;or by hostname</h2>
+<svg class="dia" viewBox="0 0 1000 570" style="max-height:62vh" role="img" aria-label="Left: an Ingress manifest with two host rules, the first framed violet for shop.example.com and the second framed teal for admin.example.com. Right: both hostnames resolving to the same IP address, arriving at the same ingress controller, which reads the Host header and splits them to two different Services.">
+  <style>
+    svg.dia .ihnA{--c:#b45309}svg.dia .ihnB{--c:#7c3aed}svg.dia .ihnC{--c:#0f766e}
+    svg.dia .ihnEdge{fill:none;stroke:var(--c);stroke-width:2}
+    svg.dia .ihnLine{fill:none;stroke:var(--c);stroke-width:2.5}
+    svg.dia .ihnTag{fill:var(--c)}
+    svg.dia .ihnTagTxt{font-size:11px;font-weight:700;fill:var(--bg);letter-spacing:.05em}
+    svg.dia .ihnKey{fill:var(--c);font-weight:700}
+    svg.dia .ihnVal{fill:var(--c);font-weight:700}
+    svg.dia .ihnTxt{fill:var(--c)}
+    svg.dia .ihnFlow{fill:none;stroke:var(--accent);stroke-width:2}
+    @media (prefers-color-scheme: dark){
+      svg.dia .ihnA{--c:#f0b352}svg.dia .ihnB{--c:#a78bfa}svg.dia .ihnC{--c:#4dd0bd}
+    }
+  </style>
+
+  <text x="16" y="36" class="sm">two rules, two hosts&hellip;</text>
+  <text x="984" y="36" class="sm" text-anchor="end">&hellip;one address, told apart by the Host header</text>
+
+  <rect x="16" y="52" width="582" height="495" rx="10" class="stroke-line" fill="var(--code-bg)"/>
+  <path d="M16 84 H598" class="stroke-line nofill"/>
+  <circle cx="38" cy="68" r="5" class="fill-panel stroke-line"/>
+  <circle cx="56" cy="68" r="5" class="fill-panel stroke-line"/>
+  <circle cx="74" cy="68" r="5" class="fill-panel stroke-line"/>
+  <text x="96" y="73" class="sm">ingress-hosts.yaml</text>
+  <path d="M68 84 V547" class="stroke-line nofill"/>
+
+  <g class="ihnA"><rect x="80" y="200" width="496" height="25" rx="8" class="ihnEdge"/>
+    <rect x="438" y="190" width="138" height="20" rx="6" class="ihnTag"/>
+    <text x="507" y="204" class="ihnTagTxt" text-anchor="middle">WHICH CONTROLLER</text></g>
+  <g class="ihnB"><rect x="80" y="239" width="496" height="138" rx="9" class="ihnEdge"/>
+    <rect x="396" y="229" width="180" height="20" rx="6" class="ihnTag"/>
+    <text x="486" y="243" class="ihnTagTxt" text-anchor="middle">HOST 1 &mdash; shop.example.com</text></g>
+  <g class="ihnC"><rect x="80" y="391" width="496" height="138" rx="9" class="ihnEdge"/>
+    <rect x="384" y="381" width="192" height="20" rx="6" class="ihnTag"/>
+    <text x="480" y="395" class="ihnTagTxt" text-anchor="middle">HOST 2 &mdash; admin.example.com</text></g>
+
+  <text x="58" y="120" class="tiny" text-anchor="end">1</text>
+  <text x="106" y="120" class="mono" font-size="12.5">apiVersion: networking.k8s.io/v1</text>
+  <text x="58" y="139" class="tiny" text-anchor="end">2</text>
+  <text x="106" y="139" class="mono" font-size="12.5">kind: Ingress</text>
+  <text x="58" y="158" class="tiny" text-anchor="end">3</text>
+  <text x="106" y="158" class="mono" font-size="12.5">metadata:</text>
+  <text x="58" y="177" class="tiny" text-anchor="end">4</text>
+  <text x="122" y="177" class="mono" font-size="12.5">name: public</text>
+  <text x="58" y="196" class="tiny" text-anchor="end">5</text>
+  <text x="106" y="196" class="mono" font-size="12.5">spec:</text>
+  <text x="58" y="215" class="tiny" text-anchor="end">6</text>
+  <text x="122" y="215" class="mono" font-size="12.5"><tspan class="ihnKey ihnA">ingressClassName</tspan>: <tspan class="ihnVal ihnA">nginx</tspan></text>
+  <text x="58" y="234" class="tiny" text-anchor="end">7</text>
+  <text x="122" y="234" class="mono" font-size="12.5">rules:</text>
+  <text x="58" y="253" class="tiny" text-anchor="end">8</text>
+  <text x="138" y="253" class="mono" font-size="12.5">- <tspan class="ihnKey ihnB">host</tspan>: <tspan class="ihnVal ihnB">shop.example.com</tspan></text>
+  <text x="58" y="272" class="tiny" text-anchor="end">9</text>
+  <text x="154" y="272" class="mono" font-size="12.5">http:</text>
+  <text x="58" y="291" class="tiny" text-anchor="end">10</text>
+  <text x="170" y="291" class="mono" font-size="12.5">paths:</text>
+  <text x="58" y="310" class="tiny" text-anchor="end">11</text>
+  <text x="186" y="310" class="mono" font-size="12.5">- path: /</text>
+  <text x="58" y="329" class="tiny" text-anchor="end">12</text>
+  <text x="202" y="329" class="mono" font-size="12.5">pathType: Prefix</text>
+  <text x="58" y="348" class="tiny" text-anchor="end">13</text>
+  <text x="202" y="348" class="mono" font-size="12.5">backend:</text>
+  <text x="58" y="367" class="tiny" text-anchor="end">14</text>
+  <text x="218" y="367" class="mono" font-size="12.5">service: {name: <tspan class="ihnVal ihnB">shop</tspan>, port: {number: 80}}</text>
+  <text x="58" y="386" class="tiny" text-anchor="end">15</text>
+  <text x="58" y="405" class="tiny" text-anchor="end">16</text>
+  <text x="138" y="405" class="mono" font-size="12.5">- <tspan class="ihnKey ihnC">host</tspan>: <tspan class="ihnVal ihnC">admin.example.com</tspan></text>
+  <text x="58" y="424" class="tiny" text-anchor="end">17</text>
+  <text x="154" y="424" class="mono" font-size="12.5">http:</text>
+  <text x="58" y="443" class="tiny" text-anchor="end">18</text>
+  <text x="170" y="443" class="mono" font-size="12.5">paths:</text>
+  <text x="58" y="462" class="tiny" text-anchor="end">19</text>
+  <text x="186" y="462" class="mono" font-size="12.5">- path: /</text>
+  <text x="58" y="481" class="tiny" text-anchor="end">20</text>
+  <text x="202" y="481" class="mono" font-size="12.5">pathType: Prefix</text>
+  <text x="58" y="500" class="tiny" text-anchor="end">21</text>
+  <text x="202" y="500" class="mono" font-size="12.5">backend:</text>
+  <text x="58" y="519" class="tiny" text-anchor="end">22</text>
+  <text x="218" y="519" class="mono" font-size="12.5">service: {name: <tspan class="ihnVal ihnC">admin</tspan>, port: {number: 80}}</text>
+
+  <g class="ihnB"><rect x="620" y="56" width="172" height="44" rx="10" class="fill-panel"/>
+    <rect x="620" y="56" width="172" height="44" rx="10" class="ihnEdge"/>
+    <text x="706" y="83" class="mono ihnTxt" font-size="11.5" text-anchor="middle">shop.example.com</text></g>
+  <g class="ihnC"><rect x="812" y="56" width="172" height="44" rx="10" class="fill-panel"/>
+    <rect x="812" y="56" width="172" height="44" rx="10" class="ihnEdge"/>
+    <text x="898" y="83" class="mono ihnTxt" font-size="11.5" text-anchor="middle">admin.example.com</text></g>
+
+  <g class="ihnB ihnLine"><path d="M706 102 L760 136"/></g>
+  <g class="ihnB" fill="var(--c)"><path d="M-7 -5 L0 0 L-7 5 Z" transform="translate(766,140) rotate(122)"/></g>
+  <g class="ihnC ihnLine"><path d="M898 102 L844 136"/></g>
+  <g class="ihnC" fill="var(--c)"><path d="M-7 -5 L0 0 L-7 5 Z" transform="translate(838,140) rotate(58)"/></g>
+
+  <rect x="664" y="146" width="276" height="48" rx="10" class="fill-panel stroke-line"/>
+  <text x="802" y="168" class="mono" font-size="13" text-anchor="middle">203.0.113.10</text>
+  <text x="802" y="186" class="tiny" text-anchor="middle">one A record, shared by both names</text>
+
+  <path d="M802 196 V216" class="ihnFlow"/>
+  <path d="M794 214 l8 14 l8 -14 z" fill="var(--accent)"/>
+
+  <g class="ihnA">
+    <rect x="620" y="232" width="364" height="72" rx="12" class="fill-panel"/>
+    <rect x="620" y="232" width="364" height="72" rx="12" class="ihnEdge"/>
+    <text x="802" y="260" class="lbl ihnTxt" font-size="14" text-anchor="middle">ingress controller</text>
+    <text x="802" y="282" class="tiny" text-anchor="middle">reads the <tspan class="mono" font-size="11">Host:</tspan> header and picks a rule</text>
+  </g>
+
+  <g class="ihnB ihnLine"><path d="M770 306 L712 350"/></g>
+  <g class="ihnB" fill="var(--c)"><path d="M-7 -5 L0 0 L-7 5 Z" transform="translate(705,356) rotate(140)"/></g>
+  <g class="ihnC ihnLine"><path d="M834 306 L892 350"/></g>
+  <g class="ihnC" fill="var(--c)"><path d="M-7 -5 L0 0 L-7 5 Z" transform="translate(899,356) rotate(40)"/></g>
+
+  <g class="ihnB">
+    <rect x="620" y="364" width="172" height="80" rx="12" class="fill-panel"/>
+    <rect x="620" y="364" width="172" height="80" rx="12" class="ihnEdge"/>
+    <text x="706" y="392" class="lbl ihnTxt" font-size="13" text-anchor="middle">Service</text>
+    <text x="706" y="414" class="mono" font-size="12.5" text-anchor="middle">shop</text>
+    <text x="706" y="434" class="tiny ihnTxt" text-anchor="middle">port 80</text>
+  </g>
+  <g class="ihnC">
+    <rect x="812" y="364" width="172" height="80" rx="12" class="fill-panel"/>
+    <rect x="812" y="364" width="172" height="80" rx="12" class="ihnEdge"/>
+    <text x="898" y="392" class="lbl ihnTxt" font-size="13" text-anchor="middle">Service</text>
+    <text x="898" y="414" class="mono" font-size="12.5" text-anchor="middle">admin</text>
+    <text x="898" y="434" class="tiny ihnTxt" text-anchor="middle">port 80</text>
+  </g>
+
+  <text x="802" y="470" class="tiny" text-anchor="middle">prove it without touching DNS:</text>
+  <rect x="620" y="482" width="364" height="52" rx="10" class="stroke-line" fill="var(--code-bg)"/>
+  <text x="638" y="503" class="mono" font-size="11.5">curl -H 'Host: admin.example.com' \</text>
+  <text x="638" y="521" class="mono" font-size="11.5" xml:space="preserve">     http://203.0.113.10/</text>
+  <text x="802" y="552" class="tiny ihnTxt ihnC" text-anchor="middle">&rarr; reaches admin, from the very same IP</text>
+</svg>
+<div class="callout">These two rules can just as well live in <strong>two separate Ingress objects, in two namespaces</strong>. The controller merges everything addressed to it &mdash; that is how one entry point serves many teams.</div>
+<div class="ref"><a href="https://kubernetes.io/docs/concepts/services-networking/ingress/" target="_blank" rel="noopener">Ingress</a></div>
+<div class="notes">Same manifest shape as the previous slide, one level up: there the two rules differed by <code>path</code>, here they differ by <code>host</code>, and everything else is identical. The picture is the point and it has a shape worth naming &mdash; <strong>converge, then diverge</strong>. Both names are A records pointing at the <em>same</em> address, so the packets are indistinguishable at the network level; they arrive at the same controller on the same port with the same certificate. The only thing that separates them is the <code>Host:</code> header the browser sent, which is plain HTTP, older than Kubernetes, and exactly how shared web hosting has always worked. Demo the <code>curl</code> at the bottom if you have a cluster up &mdash; forging the Host header and reaching a different app from the same IP is the moment it clicks, and it also shows that the hostname is <em>not</em> a security boundary: anyone can send any Host header. Then the callout, which is the real-world shape: each team writes its own Ingress in its own namespace, all with the same <code>ingressClassName</code>, and the controller merges them. Two warnings worth naming. TLS needs either a wildcard certificate for <code>*.example.com</code> or one <code>tls:</code> block per host &mdash; the certificate is chosen by SNI, before the Host header is even read. And if two Ingresses claim the same host and path, the behaviour is <strong>not defined by Kubernetes</strong>; ingress-nginx gives it to the oldest object and logs a warning you will never see. Keep this slide to two minutes.</div>
+</section>
+
+<!-- 7b -->
+<section class="slide">
+<div class="kicker">Perspective</div>
+<h2>Ingress is done evolving. Meet Gateway API.</h2>
+<svg class="dia" viewBox="0 0 1000 540" style="max-height:60vh" role="img" aria-label="Left: the Gateway API object tree. Infrastructure providers own the GatewayClass, cluster operators own the Gateway, application developers own the HTTPRoute and TLSRoute, and the routes point at Services. Right: two panels listing what Ingress could not do and what Gateway API adds.">
+  <style>
+    svg.dia .gwA{--c:#b45309}svg.dia .gwB{--c:#7c3aed}svg.dia .gwC{--c:#0f766e}
+    svg.dia .gwEdge{fill:none;stroke:var(--c);stroke-width:2}
+    svg.dia .gwTxt{fill:var(--c)}
+    svg.dia .gwDot{fill:var(--c)}
+    svg.dia .gwJoin{fill:none;stroke:var(--line);stroke-width:2}
+    svg.dia .gwTagB{fill:var(--bad)}
+    svg.dia .gwTagO{fill:var(--ok)}
+    svg.dia .gwTagTxt{font-size:11px;font-weight:700;fill:var(--bg);letter-spacing:.05em}
+    @media (prefers-color-scheme: dark){
+      svg.dia .gwA{--c:#f0b352}svg.dia .gwB{--c:#a78bfa}svg.dia .gwC{--c:#4dd0bd}
+    }
+  </style>
+
+  <text x="300" y="36" class="sm" text-anchor="middle">one Ingress, split into three objects with three owners</text>
+
+  <g class="gwJoin">
+    <path d="M308 124 V170"/>
+    <path d="M308 228 L170 282"/>
+    <path d="M308 228 L420 282"/>
+    <path d="M170 340 L105 394"/>
+    <path d="M170 340 L255 394"/>
+    <path d="M420 340 V394"/>
+  </g>
+
+  <g class="gwA">
+    <rect x="198" y="66" width="220" height="58" rx="12" class="fill-panel"/>
+    <rect x="198" y="66" width="220" height="58" rx="12" class="gwEdge"/>
+    <text x="308" y="92" class="lbl gwTxt" font-size="15" text-anchor="middle">GatewayClass</text>
+    <text x="308" y="112" class="tiny" text-anchor="middle">which implementation</text>
+  </g>
+
+  <g class="gwB">
+    <rect x="198" y="170" width="220" height="58" rx="12" class="fill-panel"/>
+    <rect x="198" y="170" width="220" height="58" rx="12" class="gwEdge"/>
+    <text x="308" y="196" class="lbl gwTxt" font-size="15" text-anchor="middle">Gateway</text>
+    <text x="308" y="216" class="tiny" text-anchor="middle">listeners, ports, TLS</text>
+  </g>
+
+  <g class="gwC">
+    <rect x="70" y="282" width="200" height="58" rx="12" class="fill-panel"/>
+    <rect x="70" y="282" width="200" height="58" rx="12" class="gwEdge"/>
+    <text x="170" y="308" class="lbl gwTxt" font-size="14" text-anchor="middle">HTTPRoute</text>
+    <text x="170" y="328" class="tiny" text-anchor="middle">paths, headers, weights</text>
+  </g>
+  <g class="gwC">
+    <rect x="330" y="282" width="180" height="58" rx="12" class="fill-panel"/>
+    <rect x="330" y="282" width="180" height="58" rx="12" class="gwEdge"/>
+    <text x="420" y="308" class="lbl gwTxt" font-size="14" text-anchor="middle">TLSRoute</text>
+    <text x="420" y="328" class="tiny" text-anchor="middle">experimental</text>
+  </g>
+
+  <rect x="40" y="394" width="130" height="46" rx="10" class="fill-panel stroke-line"/>
+  <text x="105" y="422" class="sm" text-anchor="middle">Service</text>
+  <rect x="190" y="394" width="130" height="46" rx="10" class="fill-panel stroke-line"/>
+  <text x="255" y="422" class="sm" text-anchor="middle">Service</text>
+  <rect x="355" y="394" width="130" height="46" rx="10" class="fill-panel stroke-line"/>
+  <text x="420" y="422" class="sm" text-anchor="middle">Service</text>
+
+  <text x="300" y="476" class="sm" text-anchor="middle">each object has its own owner &mdash; nobody edits anybody else&rsquo;s</text>
+  <text x="300" y="500" class="tiny" text-anchor="middle">HTTPRoute and GRPCRoute are GA &middot; TLS, TCP and UDP routes are still experimental</text>
+
+  <rect x="628" y="56" width="356" height="172" rx="12" class="fill-bad stroke-bad"/>
+  <g class="gwTagB"><rect x="652" y="46" width="186" height="20" rx="6"/></g>
+  <text x="745" y="60" class="gwTagTxt" text-anchor="middle">INGRESS STOPS HERE</text>
+  <circle cx="650" cy="88" r="3.5" fill="var(--bad)"/>
+  <text x="666" y="92" class="sm">one object &mdash; platform and app teams share it</text>
+  <circle cx="650" cy="120" r="3.5" fill="var(--bad)"/>
+  <text x="666" y="124" class="sm">anything past path routing is a <tspan font-weight="700">vendor annotation</tspan></text>
+  <circle cx="650" cy="152" r="3.5" fill="var(--bad)"/>
+  <text x="666" y="156" class="sm">HTTP(S) only &mdash; no gRPC, TCP or UDP</text>
+  <circle cx="650" cy="184" r="3.5" fill="var(--bad)"/>
+  <text x="666" y="188" class="sm">no header or method matching, no traffic splits</text>
+  <circle cx="650" cy="212" r="3.5" fill="var(--bad)"/>
+  <text x="666" y="216" class="sm"><tspan font-weight="700">frozen</tspan> &mdash; the spec takes no new features</text>
+
+  <rect x="628" y="256" width="356" height="204" rx="12" class="fill-ok stroke-ok"/>
+  <g class="gwTagO"><rect x="652" y="246" width="206" height="20" rx="6"/></g>
+  <text x="755" y="260" class="gwTagTxt" text-anchor="middle">WHAT GATEWAY API ADDS</text>
+  <circle cx="650" cy="288" r="3.5" fill="var(--ok)"/>
+  <text x="666" y="292" class="sm">three objects, three owners &mdash; the picture left</text>
+  <circle cx="650" cy="320" r="3.5" fill="var(--ok)"/>
+  <text x="666" y="324" class="sm">routing lives <tspan font-weight="700">in the spec</tspan>, not in annotations</text>
+  <circle cx="650" cy="352" r="3.5" fill="var(--ok)"/>
+  <text x="666" y="356" class="sm">a route kind per protocol, gRPC included</text>
+  <circle cx="650" cy="384" r="3.5" fill="var(--ok)"/>
+  <text x="666" y="388" class="sm">headers, methods and <tspan font-weight="700">weights</tspan> &mdash; canary in YAML</text>
+  <circle cx="650" cy="416" r="3.5" fill="var(--ok)"/>
+  <text x="666" y="420" class="sm">routes attach across namespaces, by permission</text>
+  <circle cx="650" cy="444" r="3.5" fill="var(--ok)"/>
+  <text x="666" y="448" class="sm">portable: Istio, Envoy Gateway, Cilium, Traefik&hellip;</text>
+
+  <text x="806" y="500" class="sm" text-anchor="middle">Ingress is not deprecated.</text>
+  <text x="806" y="522" class="sm" text-anchor="middle">It is <tspan font-weight="700">finished</tspan> &mdash; and this is where the work went.</text>
+</svg>
+<div class="ref"><a href="https://kubernetes.io/docs/concepts/services-networking/gateway/" target="_blank" rel="noopener">Gateway API concepts</a> &middot; <a href="https://gateway-api.sigs.k8s.io/" target="_blank" rel="noopener">gateway-api.sigs.k8s.io</a></div>
+<div class="notes">Ninety seconds, no lab, and the picture on the left is the whole argument. Ingress put one team’s concern and another team’s concern in <em>one object</em>: the platform team owns the TLS certificate and the public address, the app team owns the paths, and both edit the same YAML. Gateway API cuts that into three, and the colours follow the owner — amber <strong>GatewayClass</strong> is the implementation, chosen once by whoever runs the infrastructure; violet <strong>Gateway</strong> is the listener, the ports and the certificates, owned by the cluster operator; teal <strong>Routes</strong> are the rules, owned by the app team, and they attach themselves upward to a Gateway rather than being granted access downward. Say that last part plainly, because it is the design decision: the operator decides which namespaces may attach, the developer decides whether to, and neither can force the other. Then the two panels. The red one is why Ingress stopped: every feature anyone wanted — rewrites, canary weights, gRPC, header matching — arrived as an annotation like <code>nginx.ingress.kubernetes.io/…</code>, which means your manifest only works on one controller and silently does nothing on another. The green one is what you get instead, and <strong>weights</strong> is the one to name: a canary release is a field in the spec, portable across implementations. Two honest caveats. HTTPRoute and GRPCRoute are GA; TLSRoute, TCPRoute and UDPRoute are still experimental, so the TLSRoute in the picture is drawn as the docs draw it, not as something to build on today. And Ingress is <strong>not deprecated</strong> — it is everywhere, it works, it is simply finished. If they inherit a cluster next month it will have Ingress; if they design a platform next year, evaluate this first.</div>
+</section>
+
+<!-- 8 -->
+<section class="slide">
+<div class="kicker">Problem 2</div>
+<h2>Config baked into the image</h2>
+<div class="cols">
+  <div class="panel bad">
+    <div class="flow col" style="margin:0">
+      <div class="node bad">image <code>:dev</code></div>
+      <div class="node bad">image <code>:staging</code></div>
+      <div class="node bad">image <code>:prod</code></div>
+    </div>
+    <p class="muted" style="text-align:center">three builds &rarr; not the same artifact</p>
+  </div>
+  <div class="panel good">
+    <div class="flow col" style="margin:0">
+      <div class="node good">one image</div>
+      <div class="arrow" style="text-align:center">+</div>
+      <div class="node accent">ConfigMap &middot; Secret</div>
+    </div>
+    <p class="muted" style="text-align:center">build once, configure at run time</p>
+  </div>
+</div>
+<p class="punch">A password inside an image is <em>readable by anyone who pulls it.</em></p>
+<div class="notes">Same app, three environments, three database URLs. If you rebuild per environment you are no longer shipping the same tested artifact — that is the real argument, beyond convenience. Kubernetes gives you two objects for this: ConfigMap for non-sensitive values, Secret for the rest.</div>
+</section>
+
+<!-- 9 -->
+<section class="slide">
+<h2>ConfigMap &rarr; into the container</h2>
+<svg class="dia" viewBox="0 0 1000 545" style="max-height:60vh" role="img" aria-label="Left: one file holding two ConfigMaps — hello-env framed in teal with two environment-variable keys, and hello-ca framed in violet holding a truncated CA certificate as a file. Right: the Pod manifest, with the envFrom block framed in teal pointing at hello-env, and the volumeMounts plus volumes blocks framed in violet pointing at hello-ca.">
+  <style>
+    svg.dia .cfmA{--c:#0f766e}svg.dia .cfmB{--c:#7c3aed}
+    svg.dia .cfmEdge{fill:none;stroke:var(--c);stroke-width:2}
+    svg.dia .cfmEdgeD{fill:none;stroke:var(--c);stroke-width:1.5;stroke-dasharray:5 4}
+    svg.dia .cfmTag{fill:var(--c)}
+    svg.dia .cfmTagTxt{font-size:11px;font-weight:700;fill:var(--bg);letter-spacing:.05em}
+    svg.dia .cfmTagO{fill:var(--code-bg);stroke:var(--c);stroke-width:1.5}
+    svg.dia .cfmTagOTxt{font-size:11px;font-weight:700;fill:var(--c);letter-spacing:.05em}
+    svg.dia .cfmKey{fill:var(--c);font-weight:700}
+    svg.dia .cfmVal{fill:var(--c);font-weight:700}
+    @media (prefers-color-scheme: dark){
+      svg.dia .cfmA{--c:#4dd0bd}svg.dia .cfmB{--c:#a78bfa}
+    }
+  </style>
+
+  <text x="16" y="36" class="sm">two ConfigMaps&hellip;</text>
+  <text x="984" y="36" class="sm" text-anchor="end">&hellip;and the Pod that consumes them</text>
+
+  <rect x="16" y="52" width="466" height="470" rx="10" class="stroke-line" fill="var(--code-bg)"/>
+  <path d="M16 84 H482" class="stroke-line nofill"/>
+  <circle cx="38" cy="68" r="5" class="fill-panel stroke-line"/>
+  <circle cx="56" cy="68" r="5" class="fill-panel stroke-line"/>
+  <circle cx="74" cy="68" r="5" class="fill-panel stroke-line"/>
+  <text x="96" y="73" class="sm">configmaps.yaml</text>
+  <path d="M68 84 V522" class="stroke-line nofill"/>
+
+  <g class="cfmA"><rect x="80" y="106" width="384" height="152" rx="9" class="cfmEdge"/>
+    <rect x="310" y="96" width="154" height="20" rx="6" class="cfmTag"/>
+    <text x="387" y="110" class="cfmTagTxt" text-anchor="middle">CONFIGMAP hello-env</text></g>
+  <g class="cfmB"><rect x="80" y="274" width="384" height="194" rx="9" class="cfmEdge"/>
+    <rect x="316" y="264" width="148" height="20" rx="6" class="cfmTag"/>
+    <text x="390" y="278" class="cfmTagTxt" text-anchor="middle">CONFIGMAP hello-ca</text></g>
+
+  <text x="58" y="122" class="tiny" text-anchor="end">1</text>
+  <text x="106" y="122" class="mono" font-size="12.5">apiVersion: v1</text>
+  <text x="58" y="143" class="tiny" text-anchor="end">2</text>
+  <text x="106" y="143" class="mono" font-size="12.5">kind: ConfigMap</text>
+  <text x="58" y="164" class="tiny" text-anchor="end">3</text>
+  <text x="106" y="164" class="mono" font-size="12.5">metadata:</text>
+  <text x="58" y="185" class="tiny" text-anchor="end">4</text>
+  <text x="122" y="185" class="mono" font-size="12.5">name: <tspan class="cfmVal cfmA">hello-env</tspan></text>
+  <text x="58" y="206" class="tiny" text-anchor="end">5</text>
+  <text x="106" y="206" class="mono" font-size="12.5">data:</text>
+  <text x="58" y="227" class="tiny" text-anchor="end">6</text>
+  <text x="122" y="227" class="mono" font-size="12.5">GREETING: "Hello Dakar"</text>
+  <text x="58" y="248" class="tiny" text-anchor="end">7</text>
+  <text x="122" y="248" class="mono" font-size="12.5">APP_ENV: "training"</text>
+  <text x="58" y="269" class="tiny" text-anchor="end">8</text>
+  <text x="106" y="269" class="mono muted" font-size="12.5">---</text>
+  <text x="58" y="290" class="tiny" text-anchor="end">9</text>
+  <text x="106" y="290" class="mono" font-size="12.5">apiVersion: v1</text>
+  <text x="58" y="311" class="tiny" text-anchor="end">10</text>
+  <text x="106" y="311" class="mono" font-size="12.5">kind: ConfigMap</text>
+  <text x="58" y="332" class="tiny" text-anchor="end">11</text>
+  <text x="106" y="332" class="mono" font-size="12.5">metadata:</text>
+  <text x="58" y="353" class="tiny" text-anchor="end">12</text>
+  <text x="122" y="353" class="mono" font-size="12.5">name: <tspan class="cfmVal cfmB">hello-ca</tspan></text>
+  <text x="58" y="374" class="tiny" text-anchor="end">13</text>
+  <text x="106" y="374" class="mono" font-size="12.5">data:</text>
+  <text x="58" y="395" class="tiny" text-anchor="end">14</text>
+  <text x="122" y="395" class="mono" font-size="12.5"><tspan class="cfmKey cfmB">ca.crt</tspan>: |</text>
+  <text x="58" y="416" class="tiny" text-anchor="end">15</text>
+  <text x="138" y="416" class="mono" font-size="12.5">-----BEGIN CERTIFICATE-----</text>
+  <text x="58" y="437" class="tiny" text-anchor="end">16</text>
+  <text x="138" y="437" class="mono" font-size="12.5">MIIDdzCCAl+gAwIBAgIEbC9k</text>
+  <text x="330" y="437" class="tiny">&hellip;truncated</text>
+  <text x="58" y="458" class="tiny" text-anchor="end">17</text>
+  <text x="138" y="458" class="mono" font-size="12.5">-----END CERTIFICATE-----</text>
+
+  <rect x="518" y="52" width="466" height="470" rx="10" class="stroke-line" fill="var(--code-bg)"/>
+  <path d="M518 84 H984" class="stroke-line nofill"/>
+  <circle cx="540" cy="68" r="5" class="fill-panel stroke-line"/>
+  <circle cx="558" cy="68" r="5" class="fill-panel stroke-line"/>
+  <circle cx="576" cy="68" r="5" class="fill-panel stroke-line"/>
+  <text x="598" y="73" class="sm">pod.yaml</text>
+  <path d="M570 84 V522" class="stroke-line nofill"/>
+
+  <g class="cfmA"><rect x="582" y="274" width="384" height="68" rx="9" class="cfmEdge"/>
+    <rect x="862" y="264" width="104" height="20" rx="6" class="cfmTag"/>
+    <text x="914" y="278" class="cfmTagTxt" text-anchor="middle">AS ENV VARS</text></g>
+  <g class="cfmB"><rect x="582" y="358" width="384" height="152" rx="9" class="cfmEdge"/>
+    <rect x="852" y="348" width="114" height="20" rx="6" class="cfmTag"/>
+    <text x="909" y="362" class="cfmTagTxt" text-anchor="middle">AS A FILE</text></g>
+
+  <text x="560" y="122" class="tiny" text-anchor="end">1</text>
+  <text x="608" y="122" class="mono" font-size="12.5">apiVersion: v1</text>
+  <text x="560" y="143" class="tiny" text-anchor="end">2</text>
+  <text x="608" y="143" class="mono" font-size="12.5">kind: Pod</text>
+  <text x="560" y="164" class="tiny" text-anchor="end">3</text>
+  <text x="608" y="164" class="mono" font-size="12.5">metadata:</text>
+  <text x="560" y="185" class="tiny" text-anchor="end">4</text>
+  <text x="624" y="185" class="mono" font-size="12.5">name: hello-pod</text>
+  <text x="560" y="206" class="tiny" text-anchor="end">5</text>
+  <text x="608" y="206" class="mono" font-size="12.5">spec:</text>
+  <text x="560" y="227" class="tiny" text-anchor="end">6</text>
+  <text x="624" y="227" class="mono" font-size="12.5">containers:</text>
+  <text x="560" y="248" class="tiny" text-anchor="end">7</text>
+  <text x="640" y="248" class="mono" font-size="12.5">- name: web</text>
+  <text x="560" y="269" class="tiny" text-anchor="end">8</text>
+  <text x="656" y="269" class="mono" font-size="12.5">image: hello-k8s:1.0</text>
+  <text x="560" y="290" class="tiny" text-anchor="end">9</text>
+  <text x="656" y="290" class="mono" font-size="12.5"><tspan class="cfmKey cfmA">envFrom</tspan>:</text>
+  <text x="560" y="311" class="tiny" text-anchor="end">10</text>
+  <text x="672" y="311" class="mono" font-size="12.5">- configMapRef:</text>
+  <text x="560" y="332" class="tiny" text-anchor="end">11</text>
+  <text x="704" y="332" class="mono" font-size="12.5">name: <tspan class="cfmVal cfmA">hello-env</tspan></text>
+  <text x="560" y="353" class="tiny" text-anchor="end">12</text>
+  <text x="560" y="374" class="tiny" text-anchor="end">13</text>
+  <text x="656" y="374" class="mono" font-size="12.5"><tspan class="cfmKey cfmB">volumeMounts</tspan>:</text>
+  <text x="560" y="395" class="tiny" text-anchor="end">14</text>
+  <text x="672" y="395" class="mono" font-size="12.5">- name: ca-bundle</text>
+  <text x="560" y="416" class="tiny" text-anchor="end">15</text>
+  <text x="704" y="416" class="mono" font-size="12.5">mountPath: /etc/ssl/ca</text>
+  <text x="560" y="437" class="tiny" text-anchor="end">16</text>
+  <text x="624" y="437" class="mono" font-size="12.5"><tspan class="cfmKey cfmB">volumes</tspan>:</text>
+  <text x="560" y="458" class="tiny" text-anchor="end">17</text>
+  <text x="640" y="458" class="mono" font-size="12.5">- name: ca-bundle</text>
+  <text x="560" y="479" class="tiny" text-anchor="end">18</text>
+  <text x="672" y="479" class="mono" font-size="12.5">configMap:</text>
+  <text x="560" y="500" class="tiny" text-anchor="end">19</text>
+  <text x="688" y="500" class="mono" font-size="12.5">name: <tspan class="cfmVal cfmB">hello-ca</tspan></text>
+</svg>
+<div class="callout">Two doors into the same container. <strong>Keys become variables</strong> &mdash; or <strong>keys become filenames</strong>: <code>ca.crt</code> turns up as the file <code>/etc/ssl/ca/ca.crt</code>.</div>
+<div class="ref"><a href="https://kubernetes.io/docs/concepts/configuration/configmap/" target="_blank" rel="noopener">ConfigMaps</a></div>
+<div class="notes">The same two objects on both sides, matched by colour — walk a frame on the left, then the frame on the right that consumes it. <strong>Teal, <code>hello-env</code></strong>: plain key/value pairs, and <code>envFrom</code> pulls <em>every</em> key in as an environment variable, so the app reads <code>GREETING</code> with no code change. Use <code>env:</code> with <code>configMapKeyRef</code> instead when you want one key, or want to rename it. <strong>Violet, <code>hello-ca</code></strong>: one key whose value is a whole file — note the <code>|</code>, which is YAML for "keep the line breaks", and the certificate is truncated here only to fit. It takes <em>two</em> blocks to use it, and that is the thing they get wrong: <code>volumes</code> at Pod level says which ConfigMap, <code>volumeMounts</code> inside the container says where it lands, and the <code>name: ca-bundle</code> in both is what ties them together — point at both lines. The rule for the mount: <strong>each key becomes a file named after the key</strong>, so <code>ca.crt</code> appears at <code>/etc/ssl/ca/ca.crt</code>. Say why you would ever want the file form: anything you are containerising that insists on reading <code>nginx.conf</code>, <code>application.yaml</code> or a CA bundle off disk. Two warnings worth 15 seconds each — a <code>mountPath</code> onto an existing directory <em>hides</em> what was there, and the env-var form is read once at start-up, which is exactly the next slide.</div>
+</section>
+
+<!-- 10 -->
+<section class="slide">
+<h2>Secret &mdash; and an honest warning</h2>
+<svg class="dia" viewBox="0 0 1000 560" style="max-height:60vh" role="img" aria-label="Left: the same Secret written twice — once with data and a base64 value framed in amber, once with stringData and the plain value framed in teal. Right: the Pod manifest taking it in as a single environment variable through secretKeyRef. Below, a red band showing that reading the Secret back and piping it through base64 minus d returns the password in clear.">
+  <style>
+    svg.dia .secA{--c:#b45309}svg.dia .secB{--c:#0f766e}svg.dia .secC{--c:#7c3aed}svg.dia .secD{--c:#be185d}
+    svg.dia .secEdge{fill:none;stroke:var(--c);stroke-width:2}
+    svg.dia .secTag{fill:var(--c)}
+    svg.dia .secTagTxt{font-size:11px;font-weight:700;fill:var(--bg);letter-spacing:.05em}
+    svg.dia .secKey{fill:var(--c);font-weight:700}
+    svg.dia .secVal{fill:var(--c);font-weight:700}
+    @media (prefers-color-scheme: dark){
+      svg.dia .secA{--c:#f0b352}svg.dia .secB{--c:#4dd0bd}svg.dia .secC{--c:#a78bfa}svg.dia .secD{--c:#f472b6}
+    }
+  </style>
+
+  <text x="16" y="36" class="sm">one Secret, written two ways&hellip;</text>
+  <text x="984" y="36" class="sm" text-anchor="end">&hellip;and the Pod that consumes it</text>
+
+  <rect x="16" y="52" width="466" height="386" rx="10" class="stroke-line" fill="var(--code-bg)"/>
+  <path d="M16 84 H482" class="stroke-line nofill"/>
+  <circle cx="38" cy="68" r="5" class="fill-panel stroke-line"/>
+  <circle cx="56" cy="68" r="5" class="fill-panel stroke-line"/>
+  <circle cx="74" cy="68" r="5" class="fill-panel stroke-line"/>
+  <text x="96" y="73" class="sm">secret.yaml</text>
+  <path d="M68 84 V438" class="stroke-line nofill"/>
+
+  <g class="secA"><rect x="80" y="211" width="384" height="47" rx="9" class="secEdge"/>
+    <rect x="356" y="201" width="108" height="20" rx="6" class="secTag"/>
+    <text x="410" y="215" class="secTagTxt" text-anchor="middle">DATA &mdash; BASE64</text></g>
+  <g class="secB"><rect x="80" y="379" width="384" height="47" rx="9" class="secEdge"/>
+    <rect x="330" y="369" width="134" height="20" rx="6" class="secTag"/>
+    <text x="397" y="383" class="secTagTxt" text-anchor="middle">STRINGDATA &mdash; PLAIN</text></g>
+
+  <text x="58" y="122" class="tiny" text-anchor="end">1</text>
+  <text x="106" y="122" class="mono" font-size="12.5">apiVersion: v1</text>
+  <text x="58" y="143" class="tiny" text-anchor="end">2</text>
+  <text x="106" y="143" class="mono" font-size="12.5">kind: Secret</text>
+  <text x="58" y="164" class="tiny" text-anchor="end">3</text>
+  <text x="106" y="164" class="mono" font-size="12.5">metadata:</text>
+  <text x="58" y="185" class="tiny" text-anchor="end">4</text>
+  <text x="122" y="185" class="mono" font-size="12.5">name: <tspan class="secVal secC">hello-secret</tspan></text>
+  <text x="58" y="206" class="tiny" text-anchor="end">5</text>
+  <text x="106" y="206" class="mono" font-size="12.5">type: Opaque</text>
+  <text x="58" y="227" class="tiny" text-anchor="end">6</text>
+  <text x="106" y="227" class="mono" font-size="12.5"><tspan class="secKey secA">data</tspan>:</text>
+  <text x="58" y="248" class="tiny" text-anchor="end">7</text>
+  <text x="122" y="248" class="mono" font-size="12.5">DB_PASSWORD: cGFzc3dvcmQxMjM=</text>
+  <text x="58" y="269" class="tiny" text-anchor="end">8</text>
+  <text x="106" y="269" class="mono muted" font-size="12.5">---</text>
+  <text x="58" y="290" class="tiny" text-anchor="end">9</text>
+  <text x="106" y="290" class="mono" font-size="12.5">apiVersion: v1</text>
+  <text x="58" y="311" class="tiny" text-anchor="end">10</text>
+  <text x="106" y="311" class="mono" font-size="12.5">kind: Secret</text>
+  <text x="58" y="332" class="tiny" text-anchor="end">11</text>
+  <text x="106" y="332" class="mono" font-size="12.5">metadata:</text>
+  <text x="58" y="353" class="tiny" text-anchor="end">12</text>
+  <text x="122" y="353" class="mono" font-size="12.5">name: <tspan class="secVal secC">hello-secret</tspan></text>
+  <text x="58" y="374" class="tiny" text-anchor="end">13</text>
+  <text x="106" y="374" class="mono" font-size="12.5">type: Opaque</text>
+  <text x="58" y="395" class="tiny" text-anchor="end">14</text>
+  <text x="106" y="395" class="mono" font-size="12.5"><tspan class="secKey secB">stringData</tspan>:</text>
+  <text x="58" y="416" class="tiny" text-anchor="end">15</text>
+  <text x="122" y="416" class="mono" font-size="12.5">DB_PASSWORD: password123</text>
+
+  <rect x="518" y="52" width="466" height="386" rx="10" class="stroke-line" fill="var(--code-bg)"/>
+  <path d="M518 84 H984" class="stroke-line nofill"/>
+  <circle cx="540" cy="68" r="5" class="fill-panel stroke-line"/>
+  <circle cx="558" cy="68" r="5" class="fill-panel stroke-line"/>
+  <circle cx="576" cy="68" r="5" class="fill-panel stroke-line"/>
+  <text x="598" y="73" class="sm">pod.yaml</text>
+  <path d="M570 84 V438" class="stroke-line nofill"/>
+
+  <g class="secD"><rect x="582" y="274" width="384" height="131" rx="9" class="secEdge"/>
+    <rect x="840" y="264" width="126" height="20" rx="6" class="secTag"/>
+    <text x="903" y="278" class="secTagTxt" text-anchor="middle">AS ONE ENV VAR</text></g>
+
+  <text x="560" y="122" class="tiny" text-anchor="end">1</text>
+  <text x="608" y="122" class="mono" font-size="12.5">apiVersion: v1</text>
+  <text x="560" y="143" class="tiny" text-anchor="end">2</text>
+  <text x="608" y="143" class="mono" font-size="12.5">kind: Pod</text>
+  <text x="560" y="164" class="tiny" text-anchor="end">3</text>
+  <text x="608" y="164" class="mono" font-size="12.5">metadata:</text>
+  <text x="560" y="185" class="tiny" text-anchor="end">4</text>
+  <text x="624" y="185" class="mono" font-size="12.5">name: hello-pod</text>
+  <text x="560" y="206" class="tiny" text-anchor="end">5</text>
+  <text x="608" y="206" class="mono" font-size="12.5">spec:</text>
+  <text x="560" y="227" class="tiny" text-anchor="end">6</text>
+  <text x="624" y="227" class="mono" font-size="12.5">containers:</text>
+  <text x="560" y="248" class="tiny" text-anchor="end">7</text>
+  <text x="640" y="248" class="mono" font-size="12.5">- name: web</text>
+  <text x="560" y="269" class="tiny" text-anchor="end">8</text>
+  <text x="656" y="269" class="mono" font-size="12.5">image: hello-k8s:1.0</text>
+  <text x="560" y="290" class="tiny" text-anchor="end">9</text>
+  <text x="656" y="290" class="mono" font-size="12.5"><tspan class="secKey secD">env</tspan>:</text>
+  <text x="560" y="311" class="tiny" text-anchor="end">10</text>
+  <text x="672" y="311" class="mono" font-size="12.5">- name: DB_PASSWORD</text>
+  <text x="560" y="332" class="tiny" text-anchor="end">11</text>
+  <text x="704" y="332" class="mono" font-size="12.5">valueFrom:</text>
+  <text x="560" y="353" class="tiny" text-anchor="end">12</text>
+  <text x="720" y="353" class="mono" font-size="12.5">secretKeyRef:</text>
+  <text x="560" y="374" class="tiny" text-anchor="end">13</text>
+  <text x="736" y="374" class="mono" font-size="12.5">name: <tspan class="secVal secC">hello-secret</tspan></text>
+  <text x="560" y="395" class="tiny" text-anchor="end">14</text>
+  <text x="736" y="395" class="mono" font-size="12.5">key: DB_PASSWORD</text>
+
+  <rect x="16" y="456" width="968" height="88" rx="12" class="fill-bad stroke-bad"/>
+  <text x="40" y="482" class="mono sm">$ kubectl get secret hello-secret -o yaml</text>
+  <text x="40" y="526" class="mono" font-size="13">DB_PASSWORD: cGFzc3dvcmQxMjM=</text>
+  <path d="M278 521 H340" class="stroke-bad nofill"/>
+  <path d="M336 513 l12 8 l-12 8 z" fill="var(--bad)"/>
+  <text x="309" y="508" class="tiny bad-txt" text-anchor="middle">base64 -d</text>
+  <text x="360" y="526" class="mono bad-txt" font-size="13" font-weight="700">password123</text>
+  <text x="520" y="508" class="bad-txt" font-size="15" font-weight="700">base64 is encoding, not encryption.</text>
+  <text x="520" y="530" class="tiny">whoever is allowed to read the Secret reads the password</text>
+</svg>
+<div class="callout">A Secret keeps values out of your <strong>image</strong> and out of <strong>git</strong>. It does not make them safe &mdash; that is RBAC, encryption at rest, and an external manager.</div>
+<div class="ref"><a href="https://kubernetes.io/docs/concepts/configuration/secret/" target="_blank" rel="noopener">Secrets</a></div>
+<div class="notes">Two files on the left, one Secret. <strong>Amber, <code>data:</code></strong> — values must already be base64, so you encode by hand and the file is unreadable to a human. <strong>Teal, <code>stringData:</code></strong> — you write the value in clear and the API server encodes it for you on the way in. Same object afterwards: <code>stringData</code> is write-only, it never comes back when you read the Secret, you always get <code>data</code>. So use <code>stringData</code> for anything you type yourself; that is what the lab does. On the right, one environment variable, and it is <code>env:</code> + <code>valueFrom</code> + <code>secretKeyRef</code> rather than the <code>envFrom</code> of the previous slide — with secrets you name the one key you want, deliberately. The violet <code>hello-secret</code> appearing in all three files is the whole wiring; point at the three lines. Then the red band, and do it live rather than reading it: <code>kubectl get secret hello-secret -o yaml</code>, pipe the value through <code>base64 -d</code>, and the password is on screen. <strong>base64 is encoding, not encryption</strong> — it exists so binary values survive YAML, nothing more. What a Secret actually buys you is that the value is out of the image and out of git; what makes it safe is RBAC on who may read Secrets, encryption at rest in etcd, and an external manager such as Vault or a cloud KMS — Session 4 points there. Last thing, 10 seconds: an env var is visible to anything that can read the process environment, so the file mount from the previous slide is the better shape for a certificate or a long credential.</div>
+</section>
+
+<!-- 11 -->
+<section class="slide">
+<h2>Config changed. Nothing happened.</h2>
+<div class="flow">
+  <div class="node lg">edit ConfigMap</div>
+  <div class="arrow">&rarr;</div>
+  <div class="node lg bad">running Pod<br><small>still the old value</small></div>
+  <div class="arrow">&rarr;<small>rollout restart</small></div>
+  <div class="node lg good">new Pod<br><small>new value</small></div>
+</div>
+<pre class="big"><code>kubectl apply -f 03-configmap.yaml
+kubectl rollout restart deployment hello-deploy</code></pre>
+<p class="punch">The image never changed. <em>Only configuration did.</em></p>
+<div class="notes">Environment variables are read once, at container start. Mounted files from a ConfigMap do update in place — but the app has to notice and re-read them, which most apps don't. This surprises everyone once; better it happens here than in production.</div>
+</section>
+
+<!-- 12 -->
+<section class="slide">
+<div class="kicker">Session 2, hands-on</div>
+<h2>Rolling update</h2>
+<div class="flow">
+  <div class="node"><b>v1</b> ●●●<br><small>v2 ○○○</small></div>
+  <div class="arrow">&rarr;</div>
+  <div class="node"><b>v1</b> ●●<br><small>v2 ●○○</small></div>
+  <div class="arrow">&rarr;</div>
+  <div class="node"><b>v1</b> ●<br><small>v2 ●●○</small></div>
+  <div class="arrow">&rarr;</div>
+  <div class="node good"><b>v1</b> —<br><small>v2 ●●●</small></div>
+</div>
+<pre class="big"><code>kubectl set image deployment/hello-deploy web=hello-k8s:2.0
+kubectl rollout status deployment/hello-deploy
+kubectl rollout undo   deployment/hello-deploy   <span class="hl"># instant</span></code></pre>
+<div class="callout good">The old ReplicaSet is kept at <strong>0 replicas</strong>. That is what makes <code>undo</code> instant.</div>
+<div class="ref"><a href="https://kubernetes.io/docs/tutorials/kubernetes-basics/update/update-intro/" target="_blank" rel="noopener">Rolling updates</a></div>
+<div class="notes">They saw the picture in Session 2 (old ReplicaSet scales down, new one scales up, old ReplicaSet kept at 0) — this is the same thing with their hands on the keyboard, so recap in one sentence and get them typing. A Deployment updates by creating a NEW ReplicaSet and shifting Pods over gradually — the old version keeps serving until the new one is ready. Also show `kubectl scale deployment hello-deploy --replicas=4` here; scaling and rollout are the same controller doing the same arithmetic. "Until the new one is ready" — ready according to what? That is the next slide.</div>
+</section>
+
+<!-- 12b -->
+<section class="slide">
+<h2>Probes: what &ldquo;ready&rdquo; actually means</h2>
+<svg class="dia" viewBox="0 0 1000 560" style="max-height:62vh" role="img" aria-label="Left: the whole Pod manifest with three probes, each framed in its own colour — startupProbe amber, readinessProbe pink, livenessProbe teal. Right: the same three on a timeline — the startup probe runs first and holds the other two back, and once it succeeds readiness and liveness run side by side, one removing the Pod from the Service and the other restarting the container.">
+  <style>
+    svg.dia .prbA{--c:#b45309}svg.dia .prbB{--c:#be185d}svg.dia .prbC{--c:#0f766e}
+    svg.dia .prbEdge{fill:none;stroke:var(--c);stroke-width:2}
+    svg.dia .prbTag{fill:var(--c)}
+    svg.dia .prbTagTxt{font-size:11px;font-weight:700;fill:var(--bg);letter-spacing:.05em}
+    svg.dia .prbKey{fill:var(--c);font-weight:700}
+    svg.dia .prbTxt{fill:var(--c)}
+    svg.dia .prbFlow{fill:none;stroke:var(--accent);stroke-width:2}
+    svg.dia .prbHand{fill:none;stroke:var(--line);stroke-width:1.5;stroke-dasharray:6 5}
+    @media (prefers-color-scheme: dark){
+      svg.dia .prbA{--c:#f0b352}svg.dia .prbB{--c:#f472b6}svg.dia .prbC{--c:#4dd0bd}
+    }
+  </style>
+
+  <text x="16" y="36" class="sm">the manifest&hellip;</text>
+  <text x="984" y="36" class="sm" text-anchor="end">&hellip;and when each one runs</text>
+
+  <rect x="16" y="52" width="466" height="488" rx="10" class="stroke-line" fill="var(--code-bg)"/>
+  <path d="M16 84 H482" class="stroke-line nofill"/>
+  <circle cx="38" cy="68" r="5" class="fill-panel stroke-line"/>
+  <circle cx="56" cy="68" r="5" class="fill-panel stroke-line"/>
+  <circle cx="74" cy="68" r="5" class="fill-panel stroke-line"/>
+  <text x="96" y="73" class="sm">pod.yaml</text>
+  <path d="M68 84 V540" class="stroke-line nofill"/>
+
+  <g class="prbA"><rect x="80" y="274" width="384" height="89" rx="9" class="prbEdge"/>
+    <rect x="352" y="264" width="112" height="20" rx="6" class="prbTag"/>
+    <text x="408" y="278" class="prbTagTxt" text-anchor="middle">STARTUPPROBE</text></g>
+  <g class="prbB"><rect x="80" y="379" width="384" height="68" rx="9" class="prbEdge"/>
+    <rect x="336" y="369" width="128" height="20" rx="6" class="prbTag"/>
+    <text x="400" y="383" class="prbTagTxt" text-anchor="middle">READINESSPROBE</text></g>
+  <g class="prbC"><rect x="80" y="463" width="384" height="68" rx="9" class="prbEdge"/>
+    <rect x="348" y="453" width="116" height="20" rx="6" class="prbTag"/>
+    <text x="406" y="467" class="prbTagTxt" text-anchor="middle">LIVENESSPROBE</text></g>
+
+  <text x="58" y="122" class="tiny" text-anchor="end">1</text>
+  <text x="106" y="122" class="mono" font-size="12.5">apiVersion: v1</text>
+  <text x="58" y="143" class="tiny" text-anchor="end">2</text>
+  <text x="106" y="143" class="mono" font-size="12.5">kind: Pod</text>
+  <text x="58" y="164" class="tiny" text-anchor="end">3</text>
+  <text x="106" y="164" class="mono" font-size="12.5">metadata:</text>
+  <text x="58" y="185" class="tiny" text-anchor="end">4</text>
+  <text x="122" y="185" class="mono" font-size="12.5">name: hello-pod</text>
+  <text x="58" y="206" class="tiny" text-anchor="end">5</text>
+  <text x="106" y="206" class="mono" font-size="12.5">spec:</text>
+  <text x="58" y="227" class="tiny" text-anchor="end">6</text>
+  <text x="122" y="227" class="mono" font-size="12.5">containers:</text>
+  <text x="58" y="248" class="tiny" text-anchor="end">7</text>
+  <text x="138" y="248" class="mono" font-size="12.5">- name: web</text>
+  <text x="58" y="269" class="tiny" text-anchor="end">8</text>
+  <text x="154" y="269" class="mono" font-size="12.5">image: hello-k8s:1.0</text>
+  <text x="58" y="290" class="tiny" text-anchor="end">9</text>
+  <text x="154" y="290" class="mono" font-size="12.5"><tspan class="prbKey prbA">startupProbe</tspan>:</text>
+  <text x="58" y="311" class="tiny" text-anchor="end">10</text>
+  <text x="170" y="311" class="mono" font-size="12.5">httpGet: {path: /healthz, port: 5000}</text>
+  <text x="58" y="332" class="tiny" text-anchor="end">11</text>
+  <text x="170" y="332" class="mono" font-size="12.5">failureThreshold: 30</text>
+  <text x="58" y="353" class="tiny" text-anchor="end">12</text>
+  <text x="170" y="353" class="mono" font-size="12.5">periodSeconds: 2</text>
+  <text x="58" y="374" class="tiny" text-anchor="end">13</text>
+  <text x="58" y="395" class="tiny" text-anchor="end">14</text>
+  <text x="154" y="395" class="mono" font-size="12.5"><tspan class="prbKey prbB">readinessProbe</tspan>:</text>
+  <text x="58" y="416" class="tiny" text-anchor="end">15</text>
+  <text x="170" y="416" class="mono" font-size="12.5">httpGet: {path: /ready, port: 5000}</text>
+  <text x="58" y="437" class="tiny" text-anchor="end">16</text>
+  <text x="170" y="437" class="mono" font-size="12.5">periodSeconds: 5</text>
+  <text x="58" y="458" class="tiny" text-anchor="end">17</text>
+  <text x="58" y="479" class="tiny" text-anchor="end">18</text>
+  <text x="154" y="479" class="mono" font-size="12.5"><tspan class="prbKey prbC">livenessProbe</tspan>:</text>
+  <text x="58" y="500" class="tiny" text-anchor="end">19</text>
+  <text x="170" y="500" class="mono" font-size="12.5">httpGet: {path: /healthz, port: 5000}</text>
+  <text x="58" y="521" class="tiny" text-anchor="end">20</text>
+  <text x="170" y="521" class="mono" font-size="12.5">periodSeconds: 10</text>
+
+  <rect x="664" y="56" width="176" height="40" rx="10" class="fill-panel stroke-line"/>
+  <text x="752" y="81" class="lbl" text-anchor="middle">container starts</text>
+  <path d="M752 98 V116" class="prbFlow"/>
+  <path d="M744 114 l8 14 l8 -14 z" fill="var(--accent)"/>
+
+  <g class="prbA">
+    <rect x="530" y="128" width="442" height="86" rx="12" class="fill-panel"/>
+    <rect x="530" y="128" width="442" height="86" rx="12" class="prbEdge"/>
+    <rect x="636" y="118" width="112" height="20" rx="6" class="prbTag"/>
+    <text x="692" y="132" class="prbTagTxt" text-anchor="middle">STARTUPPROBE</text>
+    <text x="751" y="160" class="mono prbTxt" font-size="12.5" text-anchor="middle">GET /healthz every 2s</text>
+    <text x="751" y="180" class="tiny" text-anchor="middle">up to 30 tries &mdash; a full minute of grace for a slow starter</text>
+    <text x="751" y="200" class="tiny prbTxt" text-anchor="middle">the other two probes are held until this passes</text>
+  </g>
+
+  <path d="M530 240 H972" class="prbHand"/>
+  <rect x="640" y="222" width="222" height="18" rx="6" fill="var(--bg)"/>
+  <text x="751" y="236" class="tiny" text-anchor="middle">first success &mdash; never runs again</text>
+
+  <g class="prbFlow"><path d="M637 218 V266"/><path d="M865 218 V266"/></g>
+  <path d="M629 264 l8 14 l8 -14 z" fill="var(--accent)"/>
+  <path d="M857 264 l8 14 l8 -14 z" fill="var(--accent)"/>
+
+  <g class="prbB">
+    <rect x="530" y="282" width="214" height="180" rx="12" class="fill-panel"/>
+    <rect x="530" y="282" width="214" height="180" rx="12" class="prbEdge"/>
+    <rect x="573" y="272" width="128" height="20" rx="6" class="prbTag"/>
+    <text x="637" y="286" class="prbTagTxt" text-anchor="middle">READINESSPROBE</text>
+    <text x="637" y="314" class="mono" font-size="12" text-anchor="middle">GET /ready every 5s</text>
+    <text x="637" y="336" class="tiny" text-anchor="middle">can I take traffic?</text>
+  </g>
+  <rect x="592" y="348" width="90" height="22" rx="7" class="fill-bad"/>
+  <text x="637" y="364" class="tiny bad-txt" text-anchor="middle" font-weight="700">fails &times;3</text>
+  <path d="M637 374 V392" class="prbFlow"/>
+  <path d="M629 390 l8 14 l8 -14 z" fill="var(--accent)"/>
+  <g class="prbB">
+    <rect x="548" y="406" width="178" height="44" rx="10" class="fill-panel"/>
+    <rect x="548" y="406" width="178" height="44" rx="10" class="prbEdge"/>
+    <text x="637" y="426" class="lbl prbTxt" font-size="13" text-anchor="middle">out of the Service</text>
+    <text x="637" y="442" class="tiny" text-anchor="middle">still Running, never restarted</text>
+  </g>
+
+  <g class="prbC">
+    <rect x="758" y="282" width="214" height="180" rx="12" class="fill-panel"/>
+    <rect x="758" y="282" width="214" height="180" rx="12" class="prbEdge"/>
+    <rect x="807" y="272" width="116" height="20" rx="6" class="prbTag"/>
+    <text x="865" y="286" class="prbTagTxt" text-anchor="middle">LIVENESSPROBE</text>
+    <text x="865" y="314" class="mono" font-size="12" text-anchor="middle">GET /healthz every 10s</text>
+    <text x="865" y="336" class="tiny" text-anchor="middle">am I stuck?</text>
+  </g>
+  <rect x="820" y="348" width="90" height="22" rx="7" class="fill-bad"/>
+  <text x="865" y="364" class="tiny bad-txt" text-anchor="middle" font-weight="700">fails &times;3</text>
+  <path d="M865 374 V392" class="prbFlow"/>
+  <path d="M857 390 l8 14 l8 -14 z" fill="var(--accent)"/>
+  <g class="prbC">
+    <rect x="776" y="406" width="178" height="44" rx="10" class="fill-panel"/>
+    <rect x="776" y="406" width="178" height="44" rx="10" class="prbEdge"/>
+    <text x="865" y="426" class="lbl prbTxt" font-size="13" text-anchor="middle">container restarted</text>
+    <text x="865" y="442" class="tiny" text-anchor="middle">same Pod, RESTARTS +1</text>
+  </g>
+
+  <text x="751" y="496" class="sm" text-anchor="middle">three questions, three answers &mdash; and only one of them restarts anything</text>
+</svg>
+<div class="callout good">Without a readiness probe, a rolling update happily sends traffic to Pods that <strong>aren't ready yet</strong>. Probes are what make it genuinely zero-downtime.</div>
+<div class="ref"><a href="https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/" target="_blank" rel="noopener">Configure probes</a> &middot; <a href="https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/" target="_blank" rel="noopener">Pod lifecycle</a></div>
+<div class="notes">Until now Kubernetes only knows whether the <em>process</em> is alive — not whether the app works. Three probes, three different questions, and the picture on the right is about <strong>when</strong> each one runs. <strong>startupProbe</strong> (amber) runs first and alone: while it is failing the other two are held, so a slow starter cannot be killed by its own liveness probe before it has finished booting. Its budget is <code>failureThreshold × periodSeconds</code> — 30 × 2s here, a full minute — and the moment it passes once it never runs again. That is the field people do not know exists; before it, the only tool was a long <code>initialDelaySeconds</code> on liveness, which is a guess you pay for on every restart. Then the two steady-state probes start, side by side and independent. <strong>readinessProbe</strong> (pink) gates Service membership — the callback to the label/selector picture from the first half — and failing it removes the Pod from the pool without touching it. <strong>livenessProbe</strong> (teal) is the restart-me signal. The one sentence to leave them with: only liveness restarts anything. The next two slides take each one apart, so keep this one to the shape and the timing.</div>
+</section>
+<!-- 12b2 -->
+<section class="slide">
+<h2>Liveness: am I stuck?</h2>
+<svg class="dia" viewBox="0 0 1000 520" style="max-height:62vh" role="img" aria-label="Left: the livenessProbe block of the manifest, and below it a red warning about probing a dependency. Right: the kubelet polling every ten seconds — two successes, then three timeouts reaching the failure threshold, then the container being restarted, shown in a kubectl get pods line where RESTARTS goes from zero to one.">
+  <style>
+    svg.dia .lvnC{--c:#0f766e}
+    svg.dia .lvnEdge{fill:none;stroke:var(--c);stroke-width:2}
+    svg.dia .lvnTag{fill:var(--c)}
+    svg.dia .lvnTagTxt{font-size:11px;font-weight:700;fill:var(--bg);letter-spacing:.05em}
+    svg.dia .lvnKey{fill:var(--c);font-weight:700}
+    svg.dia .lvnTxt{fill:var(--c)}
+    svg.dia .lvnFlow{fill:none;stroke:var(--accent);stroke-width:2}
+    @media (prefers-color-scheme: dark){ svg.dia .lvnC{--c:#4dd0bd} }
+  </style>
+
+  <rect x="16" y="40" width="440" height="252" rx="10" class="stroke-line" fill="var(--code-bg)"/>
+  <path d="M16 72 H456" class="stroke-line nofill"/>
+  <circle cx="38" cy="56" r="5" class="fill-panel stroke-line"/>
+  <circle cx="56" cy="56" r="5" class="fill-panel stroke-line"/>
+  <circle cx="74" cy="56" r="5" class="fill-panel stroke-line"/>
+  <text x="96" y="61" class="sm">pod.yaml</text>
+  <path d="M68 72 V292" class="stroke-line nofill"/>
+
+  <g class="lvnC"><rect x="80" y="152" width="358" height="131" rx="9" class="lvnEdge"/>
+    <rect x="322" y="142" width="116" height="20" rx="6" class="lvnTag"/>
+    <text x="380" y="156" class="lvnTagTxt" text-anchor="middle">LIVENESSPROBE</text></g>
+
+  <text x="58" y="110" class="tiny" text-anchor="end">1</text>
+  <text x="106" y="110" class="mono" font-size="12.5">containers:</text>
+  <text x="58" y="131" class="tiny" text-anchor="end">2</text>
+  <text x="122" y="131" class="mono" font-size="12.5">- name: web</text>
+  <text x="58" y="152" class="tiny" text-anchor="end">3</text>
+  <text x="58" y="173" class="tiny" text-anchor="end">4</text>
+  <text x="138" y="173" class="mono" font-size="12.5"><tspan class="lvnKey lvnC">livenessProbe</tspan>:</text>
+  <text x="58" y="194" class="tiny" text-anchor="end">5</text>
+  <text x="154" y="194" class="mono" font-size="12.5">httpGet:</text>
+  <text x="58" y="215" class="tiny" text-anchor="end">6</text>
+  <text x="170" y="215" class="mono" font-size="12.5">path: /healthz</text>
+  <text x="58" y="236" class="tiny" text-anchor="end">7</text>
+  <text x="170" y="236" class="mono" font-size="12.5">port: 5000</text>
+  <text x="58" y="257" class="tiny" text-anchor="end">8</text>
+  <text x="154" y="257" class="mono" font-size="12.5">periodSeconds: 10</text>
+  <text x="58" y="278" class="tiny" text-anchor="end">9</text>
+  <text x="154" y="278" class="mono" font-size="12.5">failureThreshold: 3</text>
+
+  <rect x="16" y="314" width="440" height="110" rx="12" class="fill-bad stroke-bad"/>
+  <text x="38" y="342" class="lbl bad-txt" font-size="14">the classic self-inflicted wound</text>
+  <text x="38" y="368" class="sm">a liveness probe that checks the <tspan font-weight="700">database</tspan></text>
+  <text x="38" y="390" class="sm">turns one slow dependency into a cluster-wide</text>
+  <text x="38" y="412" class="sm">restart storm. <tspan class="bad-txt" font-weight="700">Probe your own process, nothing else.</tspan></text>
+
+  <text x="984" y="36" class="sm" text-anchor="end">the kubelet on the node, every 10s</text>
+
+  <rect x="500" y="52" width="484" height="172" rx="12" class="fill-panel stroke-line"/>
+  <text x="520" y="82" class="mono ok-txt" font-size="12.5">t+0s</text>
+  <text x="600" y="82" class="mono ok-txt" font-size="12.5">GET /healthz &rarr; 200</text>
+  <text x="520" y="110" class="mono ok-txt" font-size="12.5">t+10s</text>
+  <text x="600" y="110" class="mono ok-txt" font-size="12.5">GET /healthz &rarr; 200</text>
+  <text x="520" y="138" class="mono bad-txt" font-size="12.5">t+20s</text>
+  <text x="600" y="138" class="mono bad-txt" font-size="12.5">GET /healthz &rarr; timeout</text>
+  <text x="880" y="138" class="tiny bad-txt">1 / 3</text>
+  <text x="520" y="166" class="mono bad-txt" font-size="12.5">t+30s</text>
+  <text x="600" y="166" class="mono bad-txt" font-size="12.5">GET /healthz &rarr; timeout</text>
+  <text x="880" y="166" class="tiny bad-txt">2 / 3</text>
+  <text x="520" y="194" class="mono bad-txt" font-size="12.5" font-weight="700">t+40s</text>
+  <text x="600" y="194" class="mono bad-txt" font-size="12.5" font-weight="700">GET /healthz &rarr; timeout</text>
+  <text x="880" y="194" class="tiny bad-txt" font-weight="700">3 / 3</text>
+  <text x="742" y="216" class="tiny bad-txt" text-anchor="middle">failureThreshold reached &mdash; the app is alive but wedged</text>
+
+  <path d="M742 228 V250" class="lvnFlow"/>
+  <path d="M734 248 l8 14 l8 -14 z" fill="var(--accent)"/>
+
+  <g class="lvnC">
+    <rect x="500" y="264" width="484" height="66" rx="12" class="fill-panel"/>
+    <rect x="500" y="264" width="484" height="66" rx="12" class="lvnEdge"/>
+    <text x="742" y="292" class="lbl lvnTxt" text-anchor="middle">the kubelet restarts the container</text>
+    <text x="742" y="314" class="tiny" text-anchor="middle">same Pod, same name, same IP, same node &mdash; only the container is new</text>
+  </g>
+
+  <path d="M742 334 V356" class="lvnFlow"/>
+  <path d="M734 354 l8 14 l8 -14 z" fill="var(--accent)"/>
+
+  <rect x="500" y="370" width="484" height="100" rx="10" class="stroke-line" fill="var(--code-bg)"/>
+  <text x="520" y="396" class="mono sm">$ kubectl get pods</text>
+  <text x="520" y="420" class="mono" font-size="12" xml:space="preserve">NAME        READY   STATUS    RESTARTS   AGE</text>
+  <text x="520" y="444" class="mono" font-size="12" xml:space="preserve">hello-pod   1/1     Running   <tspan class="bad-txt" font-weight="700">1</tspan>          12m</text>
+  <text x="520" y="462" class="tiny">the age keeps counting &mdash; the Pod never died, the container did</text>
+</svg>
+<div class="callout warn">A restart, <strong>not a reschedule</strong>. If the container keeps failing you get <code>CrashLoopBackOff</code> and the restarts slow down &mdash; 10s, 20s, 40s, up to five minutes.</div>
+<div class="ref"><a href="https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/" target="_blank" rel="noopener">Configure probes</a></div>
+<div class="notes">Liveness answers one question and it is not "does my app work" &mdash; it is "is this process wedged in a way only a restart will fix". Walk the right-hand column top down: the kubelet, which lives on the node, not in the control plane, polls every <code>periodSeconds</code>; two successes; then the app deadlocks and the probe times out. Note it does <em>not</em> act on the first failure &mdash; <code>failureThreshold: 3</code> is three consecutive misses, which with a 10s period is 30 seconds of being wrong before anything happens. Then the kubelet kills the container and starts a new one. Land the distinction hard, because it is the one they get wrong: <strong>the Pod is not replaced</strong>. Same name, same IP, same node, the AGE column keeps counting; only <code>RESTARTS</code> moves. A Deployment is what replaces Pods; liveness only restarts containers. Then the red box on the left: the most common production outage caused by a probe is a liveness probe that checks the database. The database gets slow, every Pod's probe fails at once, every container restarts at once, and now nothing is serving. Probe your own process &mdash; a handler that returns 200 if the event loop is turning, nothing more. If what you mean is "do not send me traffic while the database is down", that is a readiness probe, which is the next slide.</div>
+</section>
+<!-- 12b3 -->
+<section class="slide">
+<h2>Readiness: send me traffic?</h2>
+<svg class="dia" viewBox="0 0 1000 520" style="max-height:62vh" role="img" aria-label="Left: the readinessProbe block, and below it kubectl get pods showing the middle Pod as zero of one ready with zero restarts. Right: the Service fanning out to three Pods — two ready and receiving traffic, the middle one failing its readiness probe, its arrow crossed out, and the endpoints list below containing only the two healthy IPs.">
+  <style>
+    svg.dia .rdyB{--c:#be185d}
+    svg.dia .rdyEdge{fill:none;stroke:var(--c);stroke-width:2}
+    svg.dia .rdyTag{fill:var(--c)}
+    svg.dia .rdyTagTxt{font-size:11px;font-weight:700;fill:var(--bg);letter-spacing:.05em}
+    svg.dia .rdyKey{fill:var(--c);font-weight:700}
+    svg.dia .rdyTxt{fill:var(--c)}
+    svg.dia .rdyFlow{fill:none;stroke:var(--accent);stroke-width:2.5}
+    svg.dia .rdyDead{fill:none;stroke:var(--bad);stroke-width:2;stroke-dasharray:6 5}
+  </style>
+
+  <rect x="16" y="40" width="404" height="252" rx="10" class="stroke-line" fill="var(--code-bg)"/>
+  <path d="M16 72 H420" class="stroke-line nofill"/>
+  <circle cx="38" cy="56" r="5" class="fill-panel stroke-line"/>
+  <circle cx="56" cy="56" r="5" class="fill-panel stroke-line"/>
+  <circle cx="74" cy="56" r="5" class="fill-panel stroke-line"/>
+  <text x="96" y="61" class="sm">pod.yaml</text>
+  <path d="M68 72 V292" class="stroke-line nofill"/>
+
+  <g class="rdyB"><rect x="80" y="152" width="322" height="131" rx="9" class="rdyEdge"/>
+    <rect x="274" y="142" width="128" height="20" rx="6" class="rdyTag"/>
+    <text x="338" y="156" class="rdyTagTxt" text-anchor="middle">READINESSPROBE</text></g>
+
+  <text x="58" y="110" class="tiny" text-anchor="end">1</text>
+  <text x="106" y="110" class="mono" font-size="12.5">containers:</text>
+  <text x="58" y="131" class="tiny" text-anchor="end">2</text>
+  <text x="122" y="131" class="mono" font-size="12.5">- name: web</text>
+  <text x="58" y="152" class="tiny" text-anchor="end">3</text>
+  <text x="58" y="173" class="tiny" text-anchor="end">4</text>
+  <text x="138" y="173" class="mono" font-size="12.5"><tspan class="rdyKey rdyB">readinessProbe</tspan>:</text>
+  <text x="58" y="194" class="tiny" text-anchor="end">5</text>
+  <text x="154" y="194" class="mono" font-size="12.5">httpGet:</text>
+  <text x="58" y="215" class="tiny" text-anchor="end">6</text>
+  <text x="170" y="215" class="mono" font-size="12.5">path: /ready</text>
+  <text x="58" y="236" class="tiny" text-anchor="end">7</text>
+  <text x="170" y="236" class="mono" font-size="12.5">port: 5000</text>
+  <text x="58" y="257" class="tiny" text-anchor="end">8</text>
+  <text x="154" y="257" class="mono" font-size="12.5">periodSeconds: 5</text>
+  <text x="58" y="278" class="tiny" text-anchor="end">9</text>
+  <text x="154" y="278" class="mono" font-size="12.5">failureThreshold: 3</text>
+
+  <rect x="16" y="314" width="404" height="156" rx="10" class="stroke-line" fill="var(--code-bg)"/>
+  <text x="38" y="342" class="mono sm">$ kubectl get pods</text>
+  <text x="38" y="368" class="mono" font-size="12" xml:space="preserve">NAME     READY  STATUS    RESTARTS</text>
+  <text x="38" y="392" class="mono" font-size="12" xml:space="preserve">hello-1  <tspan class="ok-txt" font-weight="700">1/1</tspan>    Running   0</text>
+  <text x="38" y="416" class="mono" font-size="12" xml:space="preserve">hello-2  <tspan class="bad-txt" font-weight="700">0/1</tspan>    Running   <tspan font-weight="700">0</tspan></text>
+  <text x="38" y="440" class="mono" font-size="12" xml:space="preserve">hello-3  <tspan class="ok-txt" font-weight="700">1/1</tspan>    Running   0</text>
+  <text x="38" y="462" class="tiny bad-txt">Running, zero restarts &mdash; readiness never restarts anything</text>
+
+  <g class="rdyB">
+    <rect x="550" y="46" width="340" height="62" rx="12" class="fill-panel"/>
+    <rect x="550" y="46" width="340" height="62" rx="12" class="rdyEdge"/>
+    <text x="720" y="70" class="lbl rdyTxt" text-anchor="middle">Service &nbsp;hello-svc</text>
+    <text x="720" y="92" class="mono" font-size="12" text-anchor="middle">selector: app=hello</text>
+  </g>
+
+  <g class="rdyFlow"><path d="M648 112 L549 180"/><path d="M792 112 L891 180"/></g>
+  <path d="M541 188 l4 -17 l11 8 z" fill="var(--accent)"/>
+  <path d="M899 188 l-4 -17 l-11 8 z" fill="var(--accent)"/>
+  <path d="M720 112 V176" class="rdyDead"/>
+  <g stroke="var(--bad)" stroke-width="2.5"><path d="M710 134 l20 20"/><path d="M730 134 l-20 20"/></g>
+
+  <rect x="456" y="196" width="166" height="116" rx="12" class="fill-panel stroke-ok"/>
+  <text x="539" y="222" class="mono" font-size="12.5" text-anchor="middle">hello-1</text>
+  <rect x="474" y="236" width="130" height="24" rx="7" class="fill-ok"/>
+  <text x="539" y="253" class="tiny ok-txt" text-anchor="middle" font-weight="700">READY 1/1</text>
+  <text x="539" y="278" class="tiny ok-txt" text-anchor="middle">in the pool</text>
+  <text x="539" y="300" class="mono" font-size="12" text-anchor="middle">10.244.0.7</text>
+
+  <rect x="637" y="196" width="166" height="116" rx="12" class="fill-panel stroke-bad"/>
+  <text x="720" y="222" class="mono" font-size="12.5" text-anchor="middle">hello-2</text>
+  <rect x="655" y="236" width="130" height="24" rx="7" class="fill-bad"/>
+  <text x="720" y="253" class="tiny bad-txt" text-anchor="middle" font-weight="700">READY 0/1</text>
+  <text x="720" y="278" class="tiny bad-txt" text-anchor="middle">out of the pool</text>
+  <text x="720" y="300" class="mono" font-size="12" text-anchor="middle">10.244.0.8</text>
+
+  <rect x="818" y="196" width="166" height="116" rx="12" class="fill-panel stroke-ok"/>
+  <text x="901" y="222" class="mono" font-size="12.5" text-anchor="middle">hello-3</text>
+  <rect x="836" y="236" width="130" height="24" rx="7" class="fill-ok"/>
+  <text x="901" y="253" class="tiny ok-txt" text-anchor="middle" font-weight="700">READY 1/1</text>
+  <text x="901" y="278" class="tiny ok-txt" text-anchor="middle">in the pool</text>
+  <text x="901" y="300" class="mono" font-size="12" text-anchor="middle">10.244.0.9</text>
+
+  <rect x="456" y="336" width="528" height="112" rx="10" class="stroke-line" fill="var(--code-bg)"/>
+  <text x="478" y="364" class="mono sm">$ kubectl get endpoints hello-svc</text>
+  <text x="478" y="390" class="mono" font-size="12" xml:space="preserve">NAME        ENDPOINTS</text>
+  <text x="478" y="414" class="mono" font-size="12" xml:space="preserve">hello-svc   <tspan class="ok-txt">10.244.0.7:5000</tspan>, <tspan class="ok-txt">10.244.0.9:5000</tspan></text>
+  <text x="478" y="438" class="tiny bad-txt"><tspan class="mono" font-size="12">10.244.0.8</tspan> is simply absent &mdash; the Service stops sending, nothing else changes</text>
+
+  <text x="720" y="486" class="sm" text-anchor="middle">the moment /ready returns 200 again, the IP comes back &mdash; no restart, no rollout</text>
+</svg>
+<div class="callout good">This is what makes a rolling update genuinely zero-downtime: a new Pod joins the Service <strong>only once it says it is ready</strong>, and an old one leaves before it is torn down.</div>
+<div class="ref"><a href="https://kubernetes.io/docs/concepts/services-networking/service/" target="_blank" rel="noopener">Service</a> &middot; <a href="https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/" target="_blank" rel="noopener">Pod lifecycle</a></div>
+<div class="notes">This is the slide where the Service from the first half of the session comes back. The selector still matches all three Pods &mdash; the labels have not changed &mdash; but <strong>a Pod only enters the Service's endpoint list once its readiness probe passes</strong>. Point at <code>hello-2</code>: it is Running, zero restarts, nothing is wrong with it as a process, it simply says "not yet" and the Service quietly stops routing to it. Show the two commands together, because together they are the whole lesson: <code>kubectl get pods</code> gives <code>0/1 Running</code> &mdash; the READY column is the probe talking, which is why that column exists and why it is not the same as STATUS &mdash; and <code>kubectl get endpoints hello-svc</code> is where you see the IP has gone. Teach that second command; it is the first thing to run when a Service "doesn't work", and in Session 4 an empty endpoint list is the symptom of a selector typo, which the API never errors on. Good reasons for readiness to fail on purpose: still loading a cache, waiting on a migration, a dependency is down and you would rather serve nothing than errors. And it is reversible with nothing else happening &mdash; one successful probe and the IP is back in the list. Contrast with the previous slide in one sentence: liveness failing restarts the container, readiness failing only takes it out of the pool.</div>
+</section>
+
+<!-- 12c -->
+<section class="slide">
+<h2>Tell the scheduler what you need</h2>
+<svg class="dia" viewBox="0 0 1000 500" style="max-height:60vh" role="img" aria-label="Left: the Pod manifest with the requests block framed amber and the limits block framed pink. Right, top: a node's capacity bar showing the share this Pod's request reserves. Right, bottom: the same two numbers as a vertical scale — a guaranteed amber floor, a grey band you may use if the node has room, a pink ceiling, and above it the zone where the container is throttled or killed.">
+  <style>
+    svg.dia .resA{--c:#b45309}svg.dia .resB{--c:#be185d}
+    svg.dia .resEdge{fill:none;stroke:var(--c);stroke-width:2}
+    svg.dia .resLine{fill:none;stroke:var(--c);stroke-width:2.5}
+    svg.dia .resTag{fill:var(--c)}
+    svg.dia .resTagTxt{font-size:11px;font-weight:700;fill:var(--bg);letter-spacing:.05em}
+    svg.dia .resKey{fill:var(--c);font-weight:700}
+    svg.dia .resTxt{fill:var(--c)}
+    @media (prefers-color-scheme: dark){ svg.dia .resA{--c:#f0b352}svg.dia .resB{--c:#f472b6} }
+  </style>
+
+  <text x="16" y="36" class="sm">the manifest&hellip;</text>
+  <text x="984" y="36" class="sm" text-anchor="end">&hellip;and the two different jobs these numbers do</text>
+
+  <rect x="16" y="52" width="466" height="408" rx="10" class="stroke-line" fill="var(--code-bg)"/>
+  <path d="M16 84 H482" class="stroke-line nofill"/>
+  <circle cx="38" cy="68" r="5" class="fill-panel stroke-line"/>
+  <circle cx="56" cy="68" r="5" class="fill-panel stroke-line"/>
+  <circle cx="74" cy="68" r="5" class="fill-panel stroke-line"/>
+  <text x="96" y="73" class="sm">pod.yaml</text>
+  <path d="M68 84 V460" class="stroke-line nofill"/>
+
+  <g class="resA"><rect x="80" y="295" width="384" height="68" rx="9" class="resEdge"/>
+    <rect x="268" y="285" width="196" height="20" rx="6" class="resTag"/>
+    <text x="366" y="299" class="resTagTxt" text-anchor="middle">REQUESTS &mdash; PLACEMENT</text></g>
+  <g class="resB"><rect x="80" y="379" width="384" height="68" rx="9" class="resEdge"/>
+    <rect x="268" y="369" width="196" height="20" rx="6" class="resTag"/>
+    <text x="366" y="383" class="resTagTxt" text-anchor="middle">LIMITS &mdash; THE CEILING</text></g>
+
+  <text x="58" y="122" class="tiny" text-anchor="end">1</text>
+  <text x="106" y="122" class="mono" font-size="12.5">apiVersion: v1</text>
+  <text x="58" y="143" class="tiny" text-anchor="end">2</text>
+  <text x="106" y="143" class="mono" font-size="12.5">kind: Pod</text>
+  <text x="58" y="164" class="tiny" text-anchor="end">3</text>
+  <text x="106" y="164" class="mono" font-size="12.5">metadata:</text>
+  <text x="58" y="185" class="tiny" text-anchor="end">4</text>
+  <text x="122" y="185" class="mono" font-size="12.5">name: hello-pod</text>
+  <text x="58" y="206" class="tiny" text-anchor="end">5</text>
+  <text x="106" y="206" class="mono" font-size="12.5">spec:</text>
+  <text x="58" y="227" class="tiny" text-anchor="end">6</text>
+  <text x="122" y="227" class="mono" font-size="12.5">containers:</text>
+  <text x="58" y="248" class="tiny" text-anchor="end">7</text>
+  <text x="138" y="248" class="mono" font-size="12.5">- name: web</text>
+  <text x="58" y="269" class="tiny" text-anchor="end">8</text>
+  <text x="154" y="269" class="mono" font-size="12.5">image: hello-k8s:1.0</text>
+  <text x="58" y="290" class="tiny" text-anchor="end">9</text>
+  <text x="154" y="290" class="mono" font-size="12.5">resources:</text>
+  <text x="58" y="311" class="tiny" text-anchor="end">10</text>
+  <text x="170" y="311" class="mono" font-size="12.5"><tspan class="resKey resA">requests</tspan>:</text>
+  <text x="58" y="332" class="tiny" text-anchor="end">11</text>
+  <text x="186" y="332" class="mono" font-size="12.5">cpu: 100m</text>
+  <text x="300" y="332" class="tiny">0.1 of one core</text>
+  <text x="58" y="353" class="tiny" text-anchor="end">12</text>
+  <text x="186" y="353" class="mono" font-size="12.5">memory: 128Mi</text>
+  <text x="58" y="374" class="tiny" text-anchor="end">13</text>
+  <text x="58" y="395" class="tiny" text-anchor="end">14</text>
+  <text x="170" y="395" class="mono" font-size="12.5"><tspan class="resKey resB">limits</tspan>:</text>
+  <text x="58" y="416" class="tiny" text-anchor="end">15</text>
+  <text x="186" y="416" class="mono" font-size="12.5">cpu: 500m</text>
+  <text x="58" y="437" class="tiny" text-anchor="end">16</text>
+  <text x="186" y="437" class="mono" font-size="12.5">memory: 256Mi</text>
+
+  <text x="530" y="70" class="sm">when the Pod is created &mdash; <tspan class="resTxt resA" font-weight="700">requests</tspan> decide where it lands</text>
+  <rect x="530" y="84" width="442" height="120" rx="12" class="fill-panel stroke-line"/>
+  <text x="550" y="110" class="sm">node &mdash; <tspan class="mono">4 CPU allocatable</tspan></text>
+  <rect x="550" y="122" width="402" height="30" rx="6" class="fill-panel stroke-line"/>
+  <rect x="551" y="123" width="238" height="28" rx="5" fill="var(--line)"/>
+  <g class="resA"><rect x="789" y="123" width="40" height="28" rx="5" class="fill-panel"/>
+    <rect x="789" y="123" width="40" height="28" rx="5" class="resEdge"/></g>
+  <text x="670" y="170" class="tiny" text-anchor="middle">already reserved by other Pods&rsquo; requests</text>
+  <text x="809" y="170" class="tiny resTxt resA" text-anchor="middle" font-weight="700">100m</text>
+  <text x="895" y="170" class="tiny" text-anchor="middle">free</text>
+  <text x="751" y="194" class="tiny resTxt resA" text-anchor="middle">the scheduler adds up <tspan font-weight="700">requests</tspan> &mdash; it never looks at what Pods actually use</text>
+
+  <text x="530" y="238" class="sm">once it is running &mdash; <tspan class="resTxt resB" font-weight="700">limits</tspan> decide how far it may go</text>
+  <rect x="530" y="252" width="442" height="226" rx="12" class="fill-panel stroke-line"/>
+
+  <rect x="556" y="274" width="390" height="42" rx="8" class="fill-bad stroke-bad"/>
+  <text x="751" y="300" class="tiny bad-txt" text-anchor="middle" font-weight="700">CPU &rarr; throttled &nbsp;&middot;&nbsp; memory &rarr; OOMKilled</text>
+
+  <g class="resB"><path d="M546 328 H956" class="resLine"/>
+    <rect x="636" y="318" width="230" height="20" rx="6" class="resTag"/>
+    <text x="751" y="332" class="resTagTxt" text-anchor="middle">LIMITS &mdash; 500m CPU / 256Mi</text></g>
+
+  <rect x="556" y="352" width="390" height="46" rx="8" class="fill-panel stroke-line"/>
+  <text x="751" y="380" class="tiny" text-anchor="middle">yours if the node has room &mdash; allowed, never guaranteed</text>
+
+  <g class="resA"><path d="M546 412 H956" class="resLine"/>
+    <rect x="628" y="402" width="246" height="20" rx="6" class="resTag"/>
+    <text x="751" y="416" class="resTagTxt" text-anchor="middle">REQUESTS &mdash; 100m CPU / 128Mi</text></g>
+
+  <g class="resA"><rect x="556" y="430" width="390" height="38" rx="8" class="fill-panel"/>
+    <rect x="556" y="430" width="390" height="38" rx="8" class="resEdge"/>
+    <text x="751" y="454" class="tiny resTxt" text-anchor="middle" font-weight="700">reserved for you &mdash; always available</text></g>
+</svg>
+<p class="punch">No requests = <em>the scheduler is guessing.</em></p>
+<div class="ref"><a href="https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/" target="_blank" rel="noopener">Resource management for Pods and Containers</a></div>
+<div class="notes">This goes in the Deployment's Pod template, right next to the probes. Requests are accounting (scheduling), limits are enforcement (cgroups — Session 1 callback). Session 4's broken-manifests lab includes absurd requests producing an eternal Pending — name that now so it lands later. Common starting point: set requests from observed usage, set a memory limit, and be careful with CPU limits (throttling).</div>
+</section>
+<!-- 12c2 -->
+<section class="slide">
+<h2>Requests: how the scheduler picks a node</h2>
+<svg class="dia" viewBox="0 0 1000 500" style="max-height:60vh" role="img" aria-label="Left: the requests block of the manifest, and a note that requests are a reservation rather than a measurement. Right: a new Pod asking for two CPUs, checked against three nodes whose bars show how much is already reserved by requests — it fits on node one and not on the other two — and below, the FailedScheduling event you get when nothing fits.">
+  <style>
+    svg.dia .rqA{--c:#b45309}
+    svg.dia .rqEdge{fill:none;stroke:var(--c);stroke-width:2}
+    svg.dia .rqTag{fill:var(--c)}
+    svg.dia .rqTagTxt{font-size:11px;font-weight:700;fill:var(--bg);letter-spacing:.05em}
+    svg.dia .rqKey{fill:var(--c);font-weight:700}
+    svg.dia .rqTxt{fill:var(--c)}
+    svg.dia .rqGhost{fill:none;stroke:var(--bad);stroke-width:2;stroke-dasharray:5 4}
+    @media (prefers-color-scheme: dark){ svg.dia .rqA{--c:#f0b352} }
+  </style>
+
+  <rect x="16" y="40" width="400" height="212" rx="10" class="stroke-line" fill="var(--code-bg)"/>
+  <path d="M16 72 H416" class="stroke-line nofill"/>
+  <circle cx="38" cy="56" r="5" class="fill-panel stroke-line"/>
+  <circle cx="56" cy="56" r="5" class="fill-panel stroke-line"/>
+  <circle cx="74" cy="56" r="5" class="fill-panel stroke-line"/>
+  <text x="96" y="61" class="sm">pod.yaml</text>
+  <path d="M68 72 V252" class="stroke-line nofill"/>
+
+  <g class="rqA"><rect x="80" y="152" width="318" height="89" rx="9" class="rqEdge"/>
+    <rect x="320" y="142" width="78" height="20" rx="6" class="rqTag"/>
+    <text x="359" y="156" class="rqTagTxt" text-anchor="middle">REQUESTS</text></g>
+
+  <text x="58" y="110" class="tiny" text-anchor="end">1</text>
+  <text x="106" y="110" class="mono" font-size="12.5">containers:</text>
+  <text x="58" y="131" class="tiny" text-anchor="end">2</text>
+  <text x="122" y="131" class="mono" font-size="12.5">- name: web</text>
+  <text x="58" y="152" class="tiny" text-anchor="end">3</text>
+  <text x="138" y="152" class="mono" font-size="12.5">resources:</text>
+  <text x="58" y="173" class="tiny" text-anchor="end">4</text>
+  <text x="154" y="173" class="mono" font-size="12.5"><tspan class="rqKey rqA">requests</tspan>:</text>
+  <text x="58" y="194" class="tiny" text-anchor="end">5</text>
+  <text x="170" y="194" class="mono" font-size="12.5">cpu: 2</text>
+  <text x="58" y="215" class="tiny" text-anchor="end">6</text>
+  <text x="170" y="215" class="mono" font-size="12.5">memory: 4Gi</text>
+
+  <g class="rqA">
+    <rect x="16" y="276" width="400" height="140" rx="12" class="fill-panel"/>
+    <rect x="16" y="276" width="400" height="140" rx="12" class="rqEdge"/>
+    <text x="38" y="304" class="lbl rqTxt" font-size="14">a reservation, not a measurement</text>
+    <text x="38" y="332" class="sm">the scheduler subtracts requests from what the</text>
+    <text x="38" y="352" class="sm">node has, and nothing ever gives them back</text>
+    <text x="38" y="380" class="sm">no request at all &rarr; it assumes <tspan font-weight="700">zero</tspan> and packs</text>
+    <text x="38" y="400" class="sm">the node until something starves</text>
+  </g>
+
+  <g class="rqA">
+    <rect x="440" y="44" width="262" height="46" rx="10" class="fill-panel"/>
+    <rect x="440" y="44" width="262" height="46" rx="10" class="rqEdge"/>
+    <text x="571" y="73" class="mono rqTxt" font-size="13" text-anchor="middle">new Pod &mdash; requests cpu: 2</text>
+  </g>
+  <text x="724" y="73" class="sm">does it still fit?</text>
+
+  <text x="450" y="124" class="tiny">node</text>
+  <text x="560" y="124" class="tiny">already reserved by requests &nbsp;&middot;&nbsp; 4 CPU allocatable</text>
+
+  <text x="450" y="156" class="mono" font-size="12.5">node-1</text>
+  <rect x="560" y="136" width="260" height="26" rx="6" class="fill-panel stroke-line"/>
+  <rect x="561" y="137" width="97" height="24" rx="5" fill="var(--line)"/>
+  <g class="rqA"><rect x="658" y="137" width="130" height="24" rx="5" class="fill-panel"/>
+    <rect x="658" y="137" width="130" height="24" rx="5" class="rqEdge"/></g>
+  <text x="723" y="154" class="tiny rqTxt rqA" text-anchor="middle" font-weight="700">+2</text>
+  <rect x="896" y="137" width="84" height="24" rx="7" class="fill-ok"/>
+  <text x="938" y="154" class="tiny ok-txt" text-anchor="middle" font-weight="700">fits</text>
+
+  <text x="450" y="216" class="mono" font-size="12.5">node-2</text>
+  <rect x="560" y="196" width="260" height="26" rx="6" class="fill-panel stroke-line"/>
+  <rect x="561" y="197" width="195" height="24" rx="5" fill="var(--line)"/>
+  <rect x="756" y="197" width="130" height="24" rx="5" class="rqGhost"/>
+  <text x="821" y="214" class="tiny bad-txt" text-anchor="middle" font-weight="700">+2</text>
+  <rect x="896" y="197" width="84" height="24" rx="7" class="fill-bad"/>
+  <text x="938" y="214" class="tiny bad-txt" text-anchor="middle" font-weight="700">no room</text>
+
+  <text x="450" y="276" class="mono" font-size="12.5">node-3</text>
+  <rect x="560" y="256" width="260" height="26" rx="6" class="fill-panel stroke-line"/>
+  <rect x="561" y="257" width="162" height="24" rx="5" fill="var(--line)"/>
+  <rect x="723" y="257" width="130" height="24" rx="5" class="rqGhost"/>
+  <text x="788" y="274" class="tiny bad-txt" text-anchor="middle" font-weight="700">+2</text>
+  <rect x="896" y="257" width="84" height="24" rx="7" class="fill-bad"/>
+  <text x="938" y="274" class="tiny bad-txt" text-anchor="middle" font-weight="700">no room</text>
+
+  <text x="560" y="310" class="tiny">the dashed block is the request that will not fit inside the bar</text>
+
+  <text x="440" y="356" class="sm">if <tspan font-weight="700">no</tspan> node has room, the Pod is not rejected &mdash; it just waits:</text>
+  <rect x="440" y="370" width="544" height="106" rx="10" class="stroke-line" fill="var(--code-bg)"/>
+  <text x="460" y="396" class="mono sm">$ kubectl describe pod hello-big</text>
+  <text x="460" y="420" class="mono" font-size="12" xml:space="preserve">Status:   <tspan class="bad-txt" font-weight="700">Pending</tspan></text>
+  <text x="460" y="444" class="mono bad-txt" font-size="12">Warning  FailedScheduling</text>
+  <text x="460" y="464" class="mono bad-txt" font-size="12">0/3 nodes are available: 3 Insufficient cpu.</text>
+</svg>
+<div class="callout warn">A node can be <strong>full by requests and idle in reality</strong>. Nothing in this picture is measured &mdash; it is all arithmetic on numbers you wrote.</div>
+<div class="ref"><a href="https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/" target="_blank" rel="noopener">Resource management for Pods and Containers</a></div>
+<div class="notes">Scheduling is simpler than people expect: for each node, add up the requests of everything already assigned to it, subtract from allocatable, and see whether the new Pod's requests still fit. That is the whole filter. Two consequences to land. First, <strong>nothing here is measured</strong> &mdash; a node whose Pods request 4 CPU and use 0.1 is full as far as the scheduler is concerned, which is the next slide. Second, a Pod that fits nowhere is not an error: it sits in <code>Pending</code> for ever, quietly, and the only place it says why is <code>kubectl describe pod</code> under Events &mdash; <code>0/3 nodes are available: 3 Insufficient cpu</code>. Teach that command here; Session 4's broken-manifests lab has exactly this bug with an absurd request, so name it now and it will land then. Mention <code>allocatable</code> is less than the machine's size — the kubelet and the OS keep a slice back — so a 4 CPU node does not offer 4 CPU. And the one that bites beginners: with no requests at all the scheduler assumes zero, cheerfully packs the node, and the first thing you notice is something being evicted at 3am.</div>
+</section>
+<!-- 12c3 -->
+<section class="slide">
+<h2>Limits: throttled, or killed</h2>
+<svg class="dia" viewBox="0 0 1000 470" style="max-height:58vh" role="img" aria-label="Left: the limits block of the manifest. Right, two columns. CPU: the container wants 900 millicores but is capped at its 500 millicore limit and simply runs slower. Memory: the container grows past its 256 mebibyte limit and is killed, shown by a kubectl get pods line reading OOMKilled with one restart.">
+  <style>
+    svg.dia .limC{--c:#0f766e}svg.dia .limB{--c:#be185d}
+    svg.dia .limEdge{fill:none;stroke:var(--c);stroke-width:2}
+    svg.dia .limTag{fill:var(--c)}
+    svg.dia .limTagTxt{font-size:11px;font-weight:700;fill:var(--bg);letter-spacing:.05em}
+    svg.dia .limKey{fill:var(--c);font-weight:700}
+    svg.dia .limTxt{fill:var(--c)}
+    svg.dia .limCeil{fill:none;stroke:var(--bad);stroke-width:2;stroke-dasharray:6 4}
+    svg.dia .limGhost{fill:none;stroke:var(--muted);stroke-width:1.5;stroke-dasharray:5 4}
+    @media (prefers-color-scheme: dark){ svg.dia .limC{--c:#4dd0bd}svg.dia .limB{--c:#f472b6} }
+  </style>
+
+  <rect x="16" y="40" width="340" height="176" rx="10" class="stroke-line" fill="var(--code-bg)"/>
+  <path d="M16 72 H356" class="stroke-line nofill"/>
+  <circle cx="38" cy="56" r="5" class="fill-panel stroke-line"/>
+  <circle cx="56" cy="56" r="5" class="fill-panel stroke-line"/>
+  <circle cx="74" cy="56" r="5" class="fill-panel stroke-line"/>
+  <text x="96" y="61" class="sm">pod.yaml</text>
+  <path d="M68 72 V216" class="stroke-line nofill"/>
+
+  <g class="limB"><rect x="80" y="131" width="258" height="68" rx="9" class="limEdge"/>
+    <rect x="278" y="121" width="60" height="20" rx="6" class="limTag"/>
+    <text x="308" y="135" class="limTagTxt" text-anchor="middle">LIMITS</text></g>
+
+  <text x="58" y="110" class="tiny" text-anchor="end">1</text>
+  <text x="106" y="110" class="mono" font-size="12.5">resources:</text>
+  <text x="58" y="131" class="tiny" text-anchor="end">2</text>
+  <text x="58" y="152" class="tiny" text-anchor="end">3</text>
+  <text x="122" y="152" class="mono" font-size="12.5"><tspan class="limKey limB">limits</tspan>:</text>
+  <text x="58" y="173" class="tiny" text-anchor="end">4</text>
+  <text x="138" y="173" class="mono" font-size="12.5">cpu: 500m</text>
+  <text x="58" y="194" class="tiny" text-anchor="end">5</text>
+  <text x="138" y="194" class="mono" font-size="12.5">memory: 256Mi</text>
+
+  <rect x="16" y="240" width="340" height="146" rx="12" class="fill-panel stroke-line"/>
+  <text x="38" y="268" class="lbl" font-size="14">no limit at all?</text>
+  <text x="38" y="296" class="sm">then the container may use the whole node,</text>
+  <text x="38" y="316" class="sm">and its neighbours pay for it.</text>
+  <text x="38" y="348" class="sm">Set a <tspan class="limTxt limB" font-weight="700">memory</tspan> limit almost always.</text>
+  <text x="38" y="370" class="sm">Be careful with a <tspan class="limTxt limC" font-weight="700">CPU</tspan> limit &mdash; see left column.</text>
+
+  <g class="limC">
+    <rect x="384" y="40" width="290" height="24" rx="7" class="limTag"/>
+    <text x="529" y="57" class="limTagTxt" text-anchor="middle">CPU OVER THE LIMIT</text>
+  </g>
+  <rect x="384" y="78" width="290" height="186" rx="12" class="fill-panel stroke-line"/>
+  <path d="M398 136 H660" class="limCeil"/>
+  <text x="406" y="128" class="tiny bad-txt">limit 500m</text>
+  <rect x="424" y="100" width="76" height="140" rx="6" class="limGhost"/>
+  <text x="462" y="256" class="tiny" text-anchor="middle">wants 900m</text>
+  <g class="limC"><rect x="552" y="136" width="76" height="104" rx="6" class="fill-panel"/>
+    <rect x="552" y="136" width="76" height="104" rx="6" class="limEdge"/></g>
+  <text x="590" y="256" class="tiny limTxt limC" text-anchor="middle" font-weight="700">gets 500m</text>
+  <g class="limC">
+    <rect x="384" y="286" width="290" height="68" rx="12" class="fill-panel"/>
+    <rect x="384" y="286" width="290" height="68" rx="12" class="limEdge"/>
+    <text x="529" y="312" class="lbl limTxt" font-size="14" text-anchor="middle">throttled</text>
+    <text x="529" y="336" class="tiny" text-anchor="middle">still Running, still healthy &mdash; just slower</text>
+  </g>
+  <text x="529" y="382" class="tiny" text-anchor="middle">latency grows, nothing in <tspan class="mono" font-size="11">kubectl get pods</tspan> changes</text>
+
+  <g class="limB">
+    <rect x="694" y="40" width="290" height="24" rx="7" class="limTag"/>
+    <text x="839" y="57" class="limTagTxt" text-anchor="middle">MEMORY OVER THE LIMIT</text>
+  </g>
+  <rect x="694" y="78" width="290" height="186" rx="12" class="fill-panel stroke-line"/>
+  <path d="M708 136 H970" class="limCeil"/>
+  <text x="716" y="128" class="tiny bad-txt">limit 256Mi</text>
+  <rect x="726" y="208" width="40" height="32" rx="5" class="fill-panel stroke-line"/>
+  <rect x="776" y="180" width="40" height="60" rx="5" class="fill-panel stroke-line"/>
+  <rect x="826" y="152" width="40" height="88" rx="5" class="fill-panel stroke-line"/>
+  <rect x="876" y="112" width="40" height="128" rx="5" class="fill-bad stroke-bad"/>
+  <g stroke="var(--bad)" stroke-width="2.5"><path d="M886 86 l20 20"/><path d="M906 86 l-20 20"/></g>
+  <text x="839" y="256" class="tiny" text-anchor="middle">120Mi &rarr; 180 &rarr; 240 &rarr; <tspan class="bad-txt" font-weight="700">300</tspan></text>
+  <g class="limB">
+    <rect x="694" y="286" width="290" height="68" rx="12" class="fill-panel"/>
+    <rect x="694" y="286" width="290" height="68" rx="12" class="limEdge"/>
+    <text x="839" y="312" class="lbl limTxt" font-size="14" text-anchor="middle">OOMKilled</text>
+    <text x="839" y="336" class="tiny" text-anchor="middle">the kernel kills it, the kubelet restarts it</text>
+  </g>
+  <rect x="694" y="366" width="290" height="58" rx="10" class="stroke-line" fill="var(--code-bg)"/>
+  <text x="712" y="388" class="mono" font-size="11" xml:space="preserve">NAME       STATUS      RESTARTS</text>
+  <text x="712" y="410" class="mono" font-size="11" xml:space="preserve">hello-pod  <tspan class="bad-txt" font-weight="700">OOMKilled</tspan>   <tspan font-weight="700">1</tspan></text>
+
+  <text x="684" y="452" class="sm" text-anchor="middle">CPU can be rationed. Memory cannot &mdash; the only way to take it back is to kill the process.</text>
+</svg>
+<div class="ref"><a href="https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/" target="_blank" rel="noopener">Resource management for Pods and Containers</a></div>
+<div class="notes">One sentence carries this slide: <strong>CPU is compressible, memory is not</strong>. Over the CPU limit the kernel simply hands the container less CPU each scheduling period &mdash; it keeps running, keeps passing its probes, and gets slower. Nothing in <code>kubectl get pods</code> changes, which is why CPU throttling is the thing people spend a week debugging as "the app is mysteriously slow"; it shows up in metrics, not in status. That is also why a CPU limit is the one to be careful with: a limit well above the request buys you very little and can cost you a lot of tail latency. Over the memory limit there is no such option &mdash; you cannot give a process less memory than it has already allocated, so the kernel's OOM killer kills the container, and the kubelet restarts it. Point at the STATUS column: <code>OOMKilled</code>, <code>RESTARTS 1</code>, and if it keeps happening, <code>CrashLoopBackOff</code>. Tie it back to the probes slides: liveness failing and OOMKilled both end in a restart, but one is Kubernetes deciding and the other is the kernel deciding, and only the second shows up as <code>OOMKilled</code>. Practical advice to close: always set a memory limit, set it from observed usage plus headroom, and when a container is OOMKilled do not reflexively raise the limit &mdash; find out whether it is a leak first.</div>
+</section>
+<!-- 12c4 -->
+<section class="slide">
+<h2>Over-provisioned: paying for air</h2>
+<svg class="dia" viewBox="0 0 1000 480" style="max-height:58vh" role="img" aria-label="Left: a manifest requesting one CPU and one gibibyte, beside kubectl top showing the Pod actually using 40 millicores and 90 mebibytes. Right: two bars for the same node — reserved by requests is full at four of four CPU, actually used is almost empty at 0.16, and a fourth Pod sits Pending even though the node is idle.">
+  <style>
+    svg.dia .wstA{--c:#b45309}svg.dia .wstC{--c:#0f766e}
+    svg.dia .wstEdge{fill:none;stroke:var(--c);stroke-width:2}
+    svg.dia .wstTag{fill:var(--c)}
+    svg.dia .wstTagTxt{font-size:11px;font-weight:700;fill:var(--bg);letter-spacing:.05em}
+    svg.dia .wstKey{fill:var(--c);font-weight:700}
+    svg.dia .wstTxt{fill:var(--c)}
+    svg.dia .wstGhost{fill:none;stroke:var(--bad);stroke-width:2;stroke-dasharray:5 4}
+    @media (prefers-color-scheme: dark){ svg.dia .wstA{--c:#f0b352}svg.dia .wstC{--c:#4dd0bd} }
+  </style>
+
+  <rect x="16" y="40" width="400" height="190" rx="10" class="stroke-line" fill="var(--code-bg)"/>
+  <path d="M16 72 H416" class="stroke-line nofill"/>
+  <circle cx="38" cy="56" r="5" class="fill-panel stroke-line"/>
+  <circle cx="56" cy="56" r="5" class="fill-panel stroke-line"/>
+  <circle cx="74" cy="56" r="5" class="fill-panel stroke-line"/>
+  <text x="96" y="61" class="sm">pod.yaml &mdash; what we asked for</text>
+  <path d="M68 72 V230" class="stroke-line nofill"/>
+
+  <g class="wstA"><rect x="80" y="131" width="318" height="89" rx="9" class="wstEdge"/>
+    <rect x="320" y="121" width="78" height="20" rx="6" class="wstTag"/>
+    <text x="359" y="135" class="wstTagTxt" text-anchor="middle">REQUESTS</text></g>
+
+  <text x="58" y="110" class="tiny" text-anchor="end">1</text>
+  <text x="106" y="110" class="mono" font-size="12.5">resources:</text>
+  <text x="58" y="131" class="tiny" text-anchor="end">2</text>
+  <text x="58" y="152" class="tiny" text-anchor="end">3</text>
+  <text x="122" y="152" class="mono" font-size="12.5"><tspan class="wstKey wstA">requests</tspan>:</text>
+  <text x="58" y="173" class="tiny" text-anchor="end">4</text>
+  <text x="138" y="173" class="mono" font-size="12.5">cpu: 1</text>
+  <text x="250" y="173" class="tiny">&ldquo;to be safe&rdquo;</text>
+  <text x="58" y="194" class="tiny" text-anchor="end">5</text>
+  <text x="138" y="194" class="mono" font-size="12.5">memory: 1Gi</text>
+
+  <rect x="16" y="254" width="400" height="124" rx="10" class="stroke-line" fill="var(--code-bg)"/>
+  <text x="38" y="280" class="mono sm">$ kubectl top pod hello-pod</text>
+  <text x="38" y="306" class="mono" font-size="12" xml:space="preserve">NAME        CPU     MEMORY</text>
+  <text x="38" y="330" class="mono" font-size="12" xml:space="preserve">hello-pod   <tspan class="wstTxt wstC" font-weight="700">40m</tspan>     <tspan class="wstTxt wstC" font-weight="700">90Mi</tspan></text>
+  <text x="38" y="360" class="tiny">what it actually uses &mdash; <tspan font-weight="700">4%</tspan> of the CPU it reserved</text>
+
+  <text x="440" y="60" class="sm">the same node, measured two ways</text>
+
+  <g class="wstA"><rect x="440" y="78" width="200" height="22" rx="7" class="wstTag"/>
+    <text x="540" y="94" class="wstTagTxt" text-anchor="middle">RESERVED BY REQUESTS</text></g>
+  <rect x="440" y="110" width="544" height="38" rx="8" class="fill-panel stroke-line"/>
+  <g class="wstA">
+    <rect x="442" y="112" width="134" height="34" rx="6" class="fill-panel"/><rect x="442" y="112" width="134" height="34" rx="6" class="wstEdge"/>
+    <rect x="578" y="112" width="134" height="34" rx="6" class="fill-panel"/><rect x="578" y="112" width="134" height="34" rx="6" class="wstEdge"/>
+    <rect x="714" y="112" width="134" height="34" rx="6" class="fill-panel"/><rect x="714" y="112" width="134" height="34" rx="6" class="wstEdge"/>
+    <rect x="850" y="112" width="132" height="34" rx="6" class="fill-panel"/><rect x="850" y="112" width="132" height="34" rx="6" class="wstEdge"/>
+  </g>
+  <text x="509" y="134" class="tiny wstTxt wstA" text-anchor="middle" font-weight="700">pod-1 &middot; 1 CPU</text>
+  <text x="645" y="134" class="tiny wstTxt wstA" text-anchor="middle" font-weight="700">pod-2 &middot; 1 CPU</text>
+  <text x="781" y="134" class="tiny wstTxt wstA" text-anchor="middle" font-weight="700">pod-3 &middot; 1 CPU</text>
+  <text x="916" y="134" class="tiny wstTxt wstA" text-anchor="middle" font-weight="700">pod-4 &middot; 1 CPU</text>
+  <text x="712" y="170" class="tiny wstTxt wstA" text-anchor="middle" font-weight="700">4 of 4 CPU &mdash; the node is full. Nothing else can be scheduled here.</text>
+
+  <g class="wstC"><rect x="440" y="196" width="178" height="22" rx="7" class="wstTag"/>
+    <text x="529" y="212" class="wstTagTxt" text-anchor="middle">ACTUALLY USED</text></g>
+  <rect x="440" y="228" width="544" height="38" rx="8" class="fill-panel stroke-line"/>
+  <g class="wstC">
+    <rect x="442" y="230" width="22" height="34" rx="5" class="fill-panel"/><rect x="442" y="230" width="22" height="34" rx="5" class="wstEdge"/>
+    <rect x="466" y="230" width="22" height="34" rx="5" class="fill-panel"/><rect x="466" y="230" width="22" height="34" rx="5" class="wstEdge"/>
+    <rect x="490" y="230" width="22" height="34" rx="5" class="fill-panel"/><rect x="490" y="230" width="22" height="34" rx="5" class="wstEdge"/>
+    <rect x="514" y="230" width="22" height="34" rx="5" class="fill-panel"/><rect x="514" y="230" width="22" height="34" rx="5" class="wstEdge"/>
+  </g>
+  <text x="712" y="288" class="tiny wstTxt wstC" text-anchor="middle" font-weight="700">0.16 of 4 CPU &mdash; the node is 96% idle.</text>
+
+  <g class="wstA">
+    <rect x="440" y="314" width="250" height="44" rx="10" class="fill-panel"/>
+    <rect x="440" y="314" width="250" height="44" rx="10" class="wstEdge"/>
+    <text x="565" y="341" class="mono wstTxt" font-size="12.5" text-anchor="middle">pod-5 &mdash; requests cpu: 1</text>
+  </g>
+  <rect x="712" y="314" width="272" height="44" rx="10" class="wstGhost"/>
+  <text x="848" y="333" class="tiny bad-txt" text-anchor="middle" font-weight="700">Pending</text>
+  <text x="848" y="350" class="tiny bad-txt" text-anchor="middle">Insufficient cpu &mdash; on an idle node</text>
+  <path d="M696 336 H706" class="nofill" stroke="var(--bad)" stroke-width="2"/>
+
+  <rect x="440" y="378" width="544" height="78" rx="12" class="fill-panel stroke-line"/>
+  <text x="462" y="404" class="lbl" font-size="14">you pay for the reservation, not the usage</text>
+  <text x="462" y="428" class="sm">four over-sized requests fill a machine that is doing nothing &mdash; so you</text>
+  <text x="462" y="448" class="sm">buy a fifth node you did not need. Set requests from <tspan class="mono" font-size="12">kubectl top</tspan>, then add headroom.</text>
+</svg>
+<div class="callout warn">The opposite is just as bad: requests far <strong>below</strong> real usage over-pack the node, and the first symptom is something being evicted or OOMKilled at 3am.</div>
+<div class="ref"><a href="https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/" target="_blank" rel="noopener">Resource management</a> &middot; <a href="https://kubernetes.io/docs/tasks/debug/debug-cluster/resource-usage-monitoring/" target="_blank" rel="noopener">Resource monitoring</a></div>
+<div class="notes">This is the slide that turns requests from a YAML chore into money. The number you write is a reservation held for the whole life of the Pod, used or not &mdash; so "cpu: 1 to be safe" on four Pods fills a four-CPU machine that is 96% idle, and the fifth Pod goes <code>Pending</code> with <code>Insufficient cpu</code> on a node you could run twenty of these on. In a cloud cluster that is where the autoscaler adds a node and the bill goes up for nothing. The fix is not clever: measure. <code>kubectl top pod</code> gives you current usage &mdash; say that it needs metrics-server installed, and that on kind you may have to install it, so it is a "know it exists" command today rather than a lab step; a real cluster has history in Prometheus and that is what you would actually size from. Then set the request near observed usage plus headroom, and the limit higher. Say the symmetric failure out loud too, because a room that has just been told "requests are waste" will go and delete them all: requests that are too <em>small</em> let the scheduler over-pack the node, and then your Pods fight for CPU and get OOMKilled under load. The goal is accurate, not small. Mention that VPA and tools like Goldilocks exist to recommend values from real usage, one sentence, no detail.</div>
+</section>
+
+<!-- 13 -->
+<section class="slide">
+<div class="kicker">Bonus</div>
+<h2>When data must survive</h2>
+<svg class="dia" viewBox="0 0 1000 590" style="max-height:62vh" role="img" aria-label="Left: one file holding a PersistentVolume framed in teal and a PersistentVolumeClaim framed in violet, the claim naming the volume. Right: the Pod manifest, its volumeMounts framed pink and its volumes block framed violet because it names the claim. Below, a band showing the chain — PV bound to PVC, PVC named by the Pod.">
+  <style>
+    svg.dia .pvsA{--c:#0f766e}svg.dia .pvsB{--c:#7c3aed}svg.dia .pvsC{--c:#be185d}
+    svg.dia .pvsEdge{fill:none;stroke:var(--c);stroke-width:2}
+    svg.dia .pvsLine{fill:none;stroke:var(--c);stroke-width:2}
+    svg.dia .pvsTag{fill:var(--c)}
+    svg.dia .pvsTagTxt{font-size:11px;font-weight:700;fill:var(--bg);letter-spacing:.05em}
+    svg.dia .pvsKey{fill:var(--c);font-weight:700}
+    svg.dia .pvsVal{fill:var(--c);font-weight:700}
+    svg.dia .pvsTxt{fill:var(--c)}
+    @media (prefers-color-scheme: dark){
+      svg.dia .pvsA{--c:#4dd0bd}svg.dia .pvsB{--c:#a78bfa}svg.dia .pvsC{--c:#f472b6}
+    }
+  </style>
+
+  <text x="16" y="36" class="sm">the storage objects&hellip;</text>
+  <text x="984" y="36" class="sm" text-anchor="end">&hellip;and the Pod that uses them</text>
+
+  <rect x="16" y="52" width="466" height="403" rx="10" class="stroke-line" fill="var(--code-bg)"/>
+  <path d="M16 84 H482" class="stroke-line nofill"/>
+  <circle cx="38" cy="68" r="5" class="fill-panel stroke-line"/>
+  <circle cx="56" cy="68" r="5" class="fill-panel stroke-line"/>
+  <circle cx="74" cy="68" r="5" class="fill-panel stroke-line"/>
+  <text x="96" y="73" class="sm">storage.yaml</text>
+  <path d="M68 84 V455" class="stroke-line nofill"/>
+
+  <g class="pvsA"><rect x="80" y="106" width="384" height="152" rx="9" class="pvsEdge"/>
+    <rect x="300" y="96" width="164" height="20" rx="6" class="pvsTag"/>
+    <text x="382" y="110" class="pvsTagTxt" text-anchor="middle">PV &mdash; THE REAL STORAGE</text></g>
+  <g class="pvsB"><rect x="80" y="274" width="384" height="173" rx="9" class="pvsEdge"/>
+    <rect x="300" y="264" width="164" height="20" rx="6" class="pvsTag"/>
+    <text x="382" y="278" class="pvsTagTxt" text-anchor="middle">PVC &mdash; THE REQUEST</text></g>
+
+  <text x="58" y="122" class="tiny" text-anchor="end">1</text>
+  <text x="106" y="122" class="mono" font-size="12.5">apiVersion: v1</text>
+  <text x="58" y="143" class="tiny" text-anchor="end">2</text>
+  <text x="106" y="143" class="mono" font-size="12.5">kind: <tspan class="pvsKey pvsA">PersistentVolume</tspan></text>
+  <text x="58" y="164" class="tiny" text-anchor="end">3</text>
+  <text x="106" y="164" class="mono" font-size="12.5">metadata:</text>
+  <text x="58" y="185" class="tiny" text-anchor="end">4</text>
+  <text x="122" y="185" class="mono" font-size="12.5">name: <tspan class="pvsVal pvsA">pv-data</tspan></text>
+  <text x="58" y="206" class="tiny" text-anchor="end">5</text>
+  <text x="106" y="206" class="mono" font-size="12.5">spec:</text>
+  <text x="58" y="227" class="tiny" text-anchor="end">6</text>
+  <text x="122" y="227" class="mono" font-size="12.5">capacity: {storage: 5Gi}</text>
+  <text x="58" y="248" class="tiny" text-anchor="end">7</text>
+  <text x="122" y="248" class="mono" font-size="12.5">accessModes: [ReadWriteOnce]</text>
+  <text x="58" y="269" class="tiny" text-anchor="end">8</text>
+  <text x="106" y="269" class="mono muted" font-size="12.5">---</text>
+  <text x="58" y="290" class="tiny" text-anchor="end">9</text>
+  <text x="106" y="290" class="mono" font-size="12.5">apiVersion: v1</text>
+  <text x="58" y="311" class="tiny" text-anchor="end">10</text>
+  <text x="106" y="311" class="mono" font-size="12.5">kind: <tspan class="pvsKey pvsB">PersistentVolumeClaim</tspan></text>
+  <text x="58" y="332" class="tiny" text-anchor="end">11</text>
+  <text x="106" y="332" class="mono" font-size="12.5">metadata:</text>
+  <text x="58" y="353" class="tiny" text-anchor="end">12</text>
+  <text x="122" y="353" class="mono" font-size="12.5">name: <tspan class="pvsVal pvsB">data-claim</tspan></text>
+  <text x="58" y="374" class="tiny" text-anchor="end">13</text>
+  <text x="106" y="374" class="mono" font-size="12.5">spec:</text>
+  <text x="58" y="395" class="tiny" text-anchor="end">14</text>
+  <text x="122" y="395" class="mono" font-size="12.5">resources: {requests: {storage: 5Gi}}</text>
+  <text x="58" y="416" class="tiny" text-anchor="end">15</text>
+  <text x="122" y="416" class="mono" font-size="12.5">accessModes: [ReadWriteOnce]</text>
+  <text x="58" y="437" class="tiny" text-anchor="end">16</text>
+  <text x="122" y="437" class="mono" font-size="12.5">volumeName: <tspan class="pvsVal pvsA">pv-data</tspan></text>
+
+  <rect x="518" y="52" width="466" height="403" rx="10" class="stroke-line" fill="var(--code-bg)"/>
+  <path d="M518 84 H984" class="stroke-line nofill"/>
+  <circle cx="540" cy="68" r="5" class="fill-panel stroke-line"/>
+  <circle cx="558" cy="68" r="5" class="fill-panel stroke-line"/>
+  <circle cx="576" cy="68" r="5" class="fill-panel stroke-line"/>
+  <text x="598" y="73" class="sm">pod.yaml</text>
+  <path d="M570 84 V455" class="stroke-line nofill"/>
+
+  <g class="pvsC"><rect x="582" y="274" width="384" height="68" rx="9" class="pvsEdge"/>
+    <rect x="814" y="264" width="152" height="20" rx="6" class="pvsTag"/>
+    <text x="890" y="278" class="pvsTagTxt" text-anchor="middle">WHERE IT LANDS</text></g>
+  <g class="pvsB"><rect x="582" y="358" width="384" height="89" rx="9" class="pvsEdge"/>
+    <rect x="822" y="348" width="144" height="20" rx="6" class="pvsTag"/>
+    <text x="894" y="362" class="pvsTagTxt" text-anchor="middle">WHICH CLAIM</text></g>
+
+  <text x="560" y="122" class="tiny" text-anchor="end">1</text>
+  <text x="608" y="122" class="mono" font-size="12.5">apiVersion: v1</text>
+  <text x="560" y="143" class="tiny" text-anchor="end">2</text>
+  <text x="608" y="143" class="mono" font-size="12.5">kind: Pod</text>
+  <text x="560" y="164" class="tiny" text-anchor="end">3</text>
+  <text x="608" y="164" class="mono" font-size="12.5">metadata:</text>
+  <text x="560" y="185" class="tiny" text-anchor="end">4</text>
+  <text x="624" y="185" class="mono" font-size="12.5">name: hello-pod</text>
+  <text x="560" y="206" class="tiny" text-anchor="end">5</text>
+  <text x="608" y="206" class="mono" font-size="12.5">spec:</text>
+  <text x="560" y="227" class="tiny" text-anchor="end">6</text>
+  <text x="624" y="227" class="mono" font-size="12.5">containers:</text>
+  <text x="560" y="248" class="tiny" text-anchor="end">7</text>
+  <text x="640" y="248" class="mono" font-size="12.5">- name: web</text>
+  <text x="560" y="269" class="tiny" text-anchor="end">8</text>
+  <text x="656" y="269" class="mono" font-size="12.5">image: hello-k8s:1.0</text>
+  <text x="560" y="290" class="tiny" text-anchor="end">9</text>
+  <text x="656" y="290" class="mono" font-size="12.5"><tspan class="pvsKey pvsC">volumeMounts</tspan>:</text>
+  <text x="560" y="311" class="tiny" text-anchor="end">10</text>
+  <text x="672" y="311" class="mono" font-size="12.5">- name: data</text>
+  <text x="560" y="332" class="tiny" text-anchor="end">11</text>
+  <text x="704" y="332" class="mono" font-size="12.5">mountPath: /data</text>
+  <text x="560" y="353" class="tiny" text-anchor="end">12</text>
+  <text x="560" y="374" class="tiny" text-anchor="end">13</text>
+  <text x="624" y="374" class="mono" font-size="12.5"><tspan class="pvsKey pvsB">volumes</tspan>:</text>
+  <text x="560" y="395" class="tiny" text-anchor="end">14</text>
+  <text x="640" y="395" class="mono" font-size="12.5">- name: data</text>
+  <text x="560" y="416" class="tiny" text-anchor="end">15</text>
+  <text x="672" y="416" class="mono" font-size="12.5">persistentVolumeClaim:</text>
+  <text x="560" y="437" class="tiny" text-anchor="end">16</text>
+  <text x="704" y="437" class="mono" font-size="12.5">claimName: <tspan class="pvsVal pvsB">data-claim</tspan></text>
+
+  <rect x="16" y="476" width="968" height="100" rx="12" class="fill-panel stroke-line"/>
+  <text x="500" y="498" class="tiny" text-anchor="middle"><tspan class="pvsTxt pvsA" font-weight="700">PV</tspan> is the resource that exists &nbsp;&middot;&nbsp; <tspan class="pvsTxt pvsB" font-weight="700">PVC</tspan> is the request for one &nbsp;&middot;&nbsp; a PV binds to exactly one PVC, and stays bound</text>
+
+  <g class="pvsA"><rect x="56" y="510" width="220" height="52" rx="10" class="fill-panel"/>
+    <rect x="56" y="510" width="220" height="52" rx="10" class="pvsEdge"/>
+    <text x="166" y="532" class="mono pvsTxt" font-size="12.5" text-anchor="middle">PV pv-data</text>
+    <text x="166" y="552" class="tiny" text-anchor="middle">5Gi of actual storage</text></g>
+
+  <g class="pvsA pvsLine"><path d="M292 540 H340"/></g>
+  <g fill="var(--c)" class="pvsA">
+    <path d="M-7 -5 L0 0 L-7 5 Z" transform="translate(283,540) rotate(180)"/>
+    <path d="M-7 -5 L0 0 L-7 5 Z" transform="translate(349,540)"/></g>
+  <text x="316" y="524" class="tiny pvsTxt pvsA" text-anchor="middle" font-weight="700">Bound</text>
+
+  <g class="pvsB"><rect x="356" y="510" width="240" height="52" rx="10" class="fill-panel"/>
+    <rect x="356" y="510" width="240" height="52" rx="10" class="pvsEdge"/>
+    <text x="476" y="532" class="mono pvsTxt" font-size="12.5" text-anchor="middle">PVC data-claim</text>
+    <text x="476" y="552" class="tiny" text-anchor="middle">&ldquo;I need 5Gi, ReadWriteOnce&rdquo;</text></g>
+
+  <g class="pvsB pvsLine"><path d="M666 540 H616"/></g>
+  <g fill="var(--c)" class="pvsB">
+    <path d="M-7 -5 L0 0 L-7 5 Z" transform="translate(607,540) rotate(180)"/></g>
+  <text x="641" y="524" class="tiny pvsTxt pvsB" text-anchor="middle" font-weight="700">claimName</text>
+
+  <g class="pvsC"><rect x="676" y="510" width="250" height="52" rx="10" class="fill-panel"/>
+    <rect x="676" y="510" width="250" height="52" rx="10" class="pvsEdge"/>
+    <text x="801" y="532" class="mono pvsTxt" font-size="12.5" text-anchor="middle">Pod hello-pod</text>
+    <text x="801" y="552" class="tiny" text-anchor="middle">mounts it at /data</text></g>
+</svg>
+<div class="callout warn"><code>ReadWriteOnce</code> = one node at a time &mdash; which is why our bonus lab uses a single replica.</div>
+<div class="ref"><a href="https://kubernetes.io/docs/concepts/storage/persistent-volumes/" target="_blank" rel="noopener">Persistent Volumes</a></div>
+<div class="notes">Callback to Session 1: a container's filesystem dies with the Pod. This is the fix. Keep it to the shape of the chain — depth here is out of scope for an initiation course.</div>
+</section>
+<!-- 13b -->
+<section class="slide">
+<div class="kicker">Bonus</div>
+<h2>Where the bytes actually live</h2>
+<svg class="dia" viewBox="0 0 1000 545" style="max-height:56vh" role="img" aria-label="A cluster box containing, on the left, a namespace holding the Pod and its PVC, and on the right a cluster-scoped band holding the StorageClass and the PV. The PVC is bound to the PV across the namespace boundary. Below the cluster, outside it, a cloud provider box holds a disk drawn as a cylinder, and an arrow runs from the PV object down to it.">
+  <style>
+    svg.dia .stgA{--c:#0f766e}svg.dia .stgB{--c:#7c3aed}svg.dia .stgC{--c:#be185d}svg.dia .stgD{--c:#b45309}
+    svg.dia .stgEdge{fill:none;stroke:var(--c);stroke-width:2}
+    svg.dia .stgBox{fill:none;stroke:var(--c);stroke-width:2;stroke-dasharray:7 5}
+    svg.dia .stgTag{fill:var(--c)}
+    svg.dia .stgTagTxt{font-size:11px;font-weight:700;fill:var(--bg);letter-spacing:.05em}
+    svg.dia .stgTxt{fill:var(--c)}
+    svg.dia .stgOut{fill:none;stroke:var(--line);stroke-width:1.5;stroke-dasharray:6 5}
+    svg.dia .stgFlow{fill:none;stroke:var(--accent);stroke-width:2}
+    @media (prefers-color-scheme: dark){
+      svg.dia .stgA{--c:#4dd0bd}svg.dia .stgB{--c:#a78bfa}svg.dia .stgC{--c:#f472b6}svg.dia .stgD{--c:#f0b352}
+    }
+  </style>
+
+  <rect x="24" y="56" width="952" height="300" rx="16" class="stgOut"/>
+  <rect x="44" y="46" width="86" height="20" rx="6" class="fill-panel stroke-line"/>
+  <text x="87" y="60" class="tiny" text-anchor="middle">cluster</text>
+
+  <g class="stgB"><rect x="48" y="104" width="440" height="226" rx="14" class="stgBox"/>
+    <rect x="68" y="94" width="196" height="20" rx="6" class="stgTag"/>
+    <text x="166" y="108" class="stgTagTxt" text-anchor="middle">NAMESPACE: DEFAULT</text></g>
+
+  <g class="stgC"><rect x="76" y="150" width="176" height="104" rx="12" class="fill-panel"/>
+    <rect x="76" y="150" width="176" height="104" rx="12" class="stgEdge"/>
+    <text x="164" y="182" class="lbl stgTxt" font-size="14" text-anchor="middle">Pod</text>
+    <text x="164" y="206" class="mono" font-size="12" text-anchor="middle">hello-pod</text>
+    <text x="164" y="230" class="tiny" text-anchor="middle">writes to /data</text></g>
+
+  <g class="stgFlow"><path d="M258 202 H282"/></g>
+  <path d="M278 194 l14 8 l-14 8 z" fill="var(--accent)"/>
+
+  <g class="stgB"><rect x="296" y="150" width="176" height="104" rx="12" class="fill-panel"/>
+    <rect x="296" y="150" width="176" height="104" rx="12" class="stgEdge"/>
+    <text x="384" y="182" class="lbl stgTxt" font-size="14" text-anchor="middle">PVC</text>
+    <text x="384" y="206" class="mono" font-size="12" text-anchor="middle">data-claim</text>
+    <text x="384" y="230" class="tiny" text-anchor="middle">5Gi &middot; Bound</text></g>
+  <text x="270" y="292" class="tiny" text-anchor="middle">claimName</text>
+
+  <rect x="520" y="104" width="432" height="226" rx="14" class="stgOut"/>
+  <rect x="540" y="94" width="258" height="20" rx="6" class="fill-panel stroke-line"/>
+  <text x="669" y="108" class="tiny" text-anchor="middle">cluster-scoped &mdash; no namespace</text>
+
+  <g class="stgD"><rect x="600" y="132" width="280" height="52" rx="12" class="fill-panel"/>
+    <rect x="600" y="132" width="280" height="52" rx="12" class="stgEdge"/>
+    <text x="740" y="153" class="mono stgTxt" font-size="12.5" text-anchor="middle">StorageClass standard</text>
+    <text x="740" y="173" class="tiny" text-anchor="middle">the driver that creates disks</text></g>
+
+  <g class="stgFlow"><path d="M740 188 V210"/></g>
+  <path d="M732 208 l8 14 l8 -14 z" fill="var(--accent)"/>
+  <text x="898" y="204" class="tiny" text-anchor="end">provisions</text>
+
+  <g class="stgA"><rect x="600" y="226" width="280" height="84" rx="12" class="fill-panel"/>
+    <rect x="600" y="226" width="280" height="84" rx="12" class="stgEdge"/>
+    <text x="740" y="252" class="lbl stgTxt" font-size="14" text-anchor="middle">PV</text>
+    <text x="740" y="274" class="mono" font-size="12" text-anchor="middle">pvc-8f3a1c&hellip; &middot; 5Gi</text>
+    <text x="740" y="296" class="tiny" text-anchor="middle">an object in etcd &mdash; not the data</text></g>
+
+  <path d="M478 214 C 530 214, 552 268, 592 268" class="stgFlow"/>
+  <path d="M590 260 l14 8 l-14 8 z" fill="var(--accent)"/>
+  <text x="500" y="346" class="tiny" text-anchor="middle">Bound &mdash; a namespaced claim, bound to a cluster-scoped volume</text>
+
+  <path d="M740 314 V404" class="stgFlow"/>
+  <path d="M732 402 l8 14 l8 -14 z" fill="var(--accent)"/>
+  <rect x="456" y="368" width="260" height="18" rx="6" fill="var(--bg)"/>
+  <text x="586" y="382" class="tiny" text-anchor="middle">the PV is a handle &mdash; the bytes are here</text>
+
+  <rect x="24" y="392" width="952" height="130" rx="16" class="stgOut"/>
+  <rect x="44" y="382" width="276" height="20" rx="6" class="fill-panel stroke-line"/>
+  <text x="182" y="396" class="tiny" text-anchor="middle">your cloud provider &mdash; outside the cluster</text>
+
+  <text x="56" y="436" class="sm">an Azure Managed Disk &middot; an AWS EBS volume &middot; a GCP</text>
+  <text x="56" y="458" class="sm">Persistent Disk &middot; an NFS share &middot; a storage-account file</text>
+  <text x="56" y="480" class="sm">share &mdash; Kubernetes does not care which</text>
+  <text x="56" y="506" class="tiny">on kind there is no cloud: <tspan class="mono" font-size="11">standard</tspan> writes to a directory on the node</text>
+
+  <g class="stgA">
+    <ellipse cx="800" cy="424" rx="80" ry="13" class="fill-panel"/>
+    <ellipse cx="800" cy="424" rx="80" ry="13" class="stgEdge"/>
+    <path d="M720 424 V492" class="stgEdge"/>
+    <path d="M880 424 V492" class="stgEdge"/>
+    <path d="M720 492 A 80 13 0 0 0 880 492" class="stgEdge"/>
+    <text x="800" y="456" class="mono stgTxt" font-size="12" text-anchor="middle">pvc-8f3a1c&hellip;</text>
+    <text x="800" y="476" class="tiny" text-anchor="middle">5Gi, a real disk</text>
+  </g>
+</svg>
+<div class="callout warn">Delete the PVC and, with the default reclaim policy on a dynamically provisioned volume, <strong>the disk goes too</strong>. The claim is what keeps the data alive.</div>
+<div class="ref"><a href="https://kubernetes.io/docs/concepts/storage/persistent-volumes/" target="_blank" rel="noopener">Persistent Volumes</a> &middot; <a href="https://kubernetes.io/docs/concepts/storage/storage-classes/" target="_blank" rel="noopener">Storage Classes</a></div>
+<div class="notes">The whole picture in one go, and the point is the bottom third: <strong>a PV is not storage, it is a record describing storage that exists somewhere else</strong>. Walk it. You write the PVC &mdash; "5Gi, ReadWriteOnce" &mdash; inside your namespace, next to your Pod. The StorageClass names a driver; that driver calls your cloud and creates a real disk. Kubernetes then writes a PV object describing it, and binds your claim to it. Your Pod names the claim, never the disk, which is why the same YAML works on kind, on AKS and on EKS with a different thing at the bottom each time. Three things worth saying out loud. <strong>The PVC is namespaced and the PV is not</strong> &mdash; the callback to Session 2's namespaced-vs-cluster-scoped slide, and the reason two teams cannot accidentally claim the same volume. <strong>In real life you almost never write a PV</strong>; the previous slide wrote one by hand so the two objects were both visible, but with a StorageClass you write the claim and the PV appears, which is why its name is an ugly generated <code>pvc-8f3a1c…</code>. And <strong>ReadWriteOnce means one node</strong>, because a cloud disk is attached to one machine at a time &mdash; that is physics, not a Kubernetes rule, and it is why the bonus lab runs a single replica. Close on the warn callout: the claim is the thing that owns the data's lifetime; delete it and a dynamically provisioned disk is deleted with it.</div>
+</section>
+
+<!-- 13c -->
+<section class="slide">
+<div class="kicker">Perspective</div>
+<h2>You learned the corner stone</h2>
+<svg class="dia" viewBox="0 0 1000 500" style="max-height:57vh" role="img" aria-label="Kubernetes as a wide band across the middle, with four panels of CNCF graduated projects around it: how you ship to it, how you see it, what it stands on, and how you keep it safe.">
+  <style>
+    svg.dia .ecoA{--c:#7c3aed}svg.dia .ecoB{--c:#b45309}svg.dia .ecoC{--c:#0f766e}svg.dia .ecoD{--c:#be185d}
+    svg.dia .ecoPanel{fill:none;stroke:var(--c);stroke-width:1.5;stroke-dasharray:7 5}
+    svg.dia .ecoChip{fill:none;stroke:var(--c);stroke-width:1.5}
+    svg.dia .ecoTag{fill:var(--c)}
+    svg.dia .ecoTagTxt{font-size:11px;font-weight:700;fill:var(--bg);letter-spacing:.05em}
+    svg.dia .ecoTxt{fill:var(--c);font-weight:600}
+    @media (prefers-color-scheme: dark){
+      svg.dia .ecoA{--c:#a78bfa}svg.dia .ecoB{--c:#f0b352}svg.dia .ecoC{--c:#4dd0bd}svg.dia .ecoD{--c:#f472b6}
+    }
+  </style>
+
+  <g class="ecoA"><rect x="16" y="56" width="478" height="130" rx="14" class="ecoPanel"/>
+    <rect x="40" y="46" width="186" height="20" rx="6" class="ecoTag"/>
+    <text x="133" y="60" class="ecoTagTxt" text-anchor="middle">HOW YOU SHIP TO IT</text>
+    <rect x="39" y="92" width="148" height="34" rx="9" class="fill-panel"/><rect x="39" y="92" width="148" height="34" rx="9" class="ecoChip"/>
+    <text x="113" y="114" class="mono ecoTxt" font-size="12.5" text-anchor="middle">Helm</text>
+    <rect x="197" y="92" width="148" height="34" rx="9" class="fill-panel"/><rect x="197" y="92" width="148" height="34" rx="9" class="ecoChip"/>
+    <text x="271" y="114" class="mono ecoTxt" font-size="12.5" text-anchor="middle">Argo</text>
+    <rect x="355" y="92" width="148" height="34" rx="9" class="fill-panel"/><rect x="355" y="92" width="148" height="34" rx="9" class="ecoChip"/>
+    <text x="429" y="114" class="mono ecoTxt" font-size="12.5" text-anchor="middle">Flux</text>
+    <rect x="39" y="136" width="148" height="34" rx="9" class="fill-panel"/><rect x="39" y="136" width="148" height="34" rx="9" class="ecoChip"/>
+    <text x="113" y="158" class="mono ecoTxt" font-size="12.5" text-anchor="middle">Crossplane</text>
+    <rect x="197" y="136" width="148" height="34" rx="9" class="fill-panel"/><rect x="197" y="136" width="148" height="34" rx="9" class="ecoChip"/>
+    <text x="271" y="158" class="mono ecoTxt" font-size="12.5" text-anchor="middle">Harbor</text>
+    <rect x="355" y="136" width="148" height="34" rx="9" class="fill-panel"/><rect x="355" y="136" width="148" height="34" rx="9" class="ecoChip"/>
+    <text x="429" y="158" class="mono ecoTxt" font-size="12.5" text-anchor="middle">Buildpacks</text>
+  </g>
+
+  <g class="ecoB"><rect x="506" y="56" width="478" height="130" rx="14" class="ecoPanel"/>
+    <rect x="530" y="46" width="160" height="20" rx="6" class="ecoTag"/>
+    <text x="610" y="60" class="ecoTagTxt" text-anchor="middle">HOW YOU SEE IT</text>
+    <rect x="608" y="92" width="148" height="34" rx="9" class="fill-panel"/><rect x="608" y="92" width="148" height="34" rx="9" class="ecoChip"/>
+    <text x="682" y="114" class="mono ecoTxt" font-size="12.5" text-anchor="middle">Prometheus</text>
+    <rect x="766" y="92" width="148" height="34" rx="9" class="fill-panel"/><rect x="766" y="92" width="148" height="34" rx="9" class="ecoChip"/>
+    <text x="840" y="114" class="mono ecoTxt" font-size="12.5" text-anchor="middle">OpenTelemetry</text>
+    <rect x="608" y="136" width="148" height="34" rx="9" class="fill-panel"/><rect x="608" y="136" width="148" height="34" rx="9" class="ecoChip"/>
+    <text x="682" y="158" class="mono ecoTxt" font-size="12.5" text-anchor="middle">Jaeger</text>
+    <rect x="766" y="136" width="148" height="34" rx="9" class="fill-panel"/><rect x="766" y="136" width="148" height="34" rx="9" class="ecoChip"/>
+    <text x="840" y="158" class="mono ecoTxt" font-size="12.5" text-anchor="middle">Fluentd</text>
+  </g>
+
+  <rect x="16" y="206" width="968" height="96" rx="16" class="fill-soft stroke-accent"/>
+  <text x="500" y="252" class="accent-txt" font-size="30" font-weight="700" text-anchor="middle">Kubernetes</text>
+  <text x="500" y="282" class="sm" text-anchor="middle">everything on this slide either runs on it, extends it, or watches it</text>
+
+  <g class="ecoC"><rect x="16" y="322" width="478" height="130" rx="14" class="ecoPanel"/>
+    <rect x="40" y="312" width="186" height="20" rx="6" class="ecoTag"/>
+    <text x="133" y="326" class="ecoTagTxt" text-anchor="middle">WHAT IT STANDS ON</text>
+    <rect x="39" y="358" width="148" height="34" rx="9" class="fill-panel"/><rect x="39" y="358" width="148" height="34" rx="9" class="ecoChip"/>
+    <text x="113" y="380" class="mono ecoTxt" font-size="12.5" text-anchor="middle">containerd</text>
+    <rect x="197" y="358" width="148" height="34" rx="9" class="fill-panel"/><rect x="197" y="358" width="148" height="34" rx="9" class="ecoChip"/>
+    <text x="271" y="380" class="mono ecoTxt" font-size="12.5" text-anchor="middle">CRI-O</text>
+    <rect x="355" y="358" width="148" height="34" rx="9" class="fill-panel"/><rect x="355" y="358" width="148" height="34" rx="9" class="ecoChip"/>
+    <text x="429" y="380" class="mono ecoTxt" font-size="12.5" text-anchor="middle">etcd</text>
+    <rect x="39" y="402" width="148" height="34" rx="9" class="fill-panel"/><rect x="39" y="402" width="148" height="34" rx="9" class="ecoChip"/>
+    <text x="113" y="424" class="mono ecoTxt" font-size="12.5" text-anchor="middle">CoreDNS</text>
+    <rect x="197" y="402" width="148" height="34" rx="9" class="fill-panel"/><rect x="197" y="402" width="148" height="34" rx="9" class="ecoChip"/>
+    <text x="271" y="424" class="mono ecoTxt" font-size="12.5" text-anchor="middle">Cilium</text>
+    <rect x="355" y="402" width="148" height="34" rx="9" class="fill-panel"/><rect x="355" y="402" width="148" height="34" rx="9" class="ecoChip"/>
+    <text x="429" y="424" class="mono ecoTxt" font-size="12.5" text-anchor="middle">Envoy</text>
+  </g>
+
+  <g class="ecoD"><rect x="506" y="322" width="478" height="130" rx="14" class="ecoPanel"/>
+    <rect x="530" y="312" width="210" height="20" rx="6" class="ecoTag"/>
+    <text x="635" y="326" class="ecoTagTxt" text-anchor="middle">HOW YOU KEEP IT SAFE</text>
+    <rect x="529" y="358" width="148" height="34" rx="9" class="fill-panel"/><rect x="529" y="358" width="148" height="34" rx="9" class="ecoChip"/>
+    <text x="603" y="380" class="mono ecoTxt" font-size="12.5" text-anchor="middle">Falco</text>
+    <rect x="687" y="358" width="148" height="34" rx="9" class="fill-panel"/><rect x="687" y="358" width="148" height="34" rx="9" class="ecoChip"/>
+    <text x="761" y="380" class="mono ecoTxt" font-size="12.5" text-anchor="middle">OPA</text>
+    <rect x="845" y="358" width="148" height="34" rx="9" class="fill-panel"/><rect x="845" y="358" width="148" height="34" rx="9" class="ecoChip"/>
+    <text x="919" y="380" class="mono ecoTxt" font-size="12.5" text-anchor="middle">Kyverno</text>
+    <rect x="529" y="402" width="148" height="34" rx="9" class="fill-panel"/><rect x="529" y="402" width="148" height="34" rx="9" class="ecoChip"/>
+    <text x="603" y="424" class="mono ecoTxt" font-size="12.5" text-anchor="middle">cert-manager</text>
+    <rect x="687" y="402" width="148" height="34" rx="9" class="fill-panel"/><rect x="687" y="402" width="148" height="34" rx="9" class="ecoChip"/>
+    <text x="761" y="424" class="mono ecoTxt" font-size="12.5" text-anchor="middle">SPIFFE</text>
+    <rect x="845" y="402" width="148" height="34" rx="9" class="fill-panel"/><rect x="845" y="402" width="148" height="34" rx="9" class="ecoChip"/>
+    <text x="919" y="424" class="mono ecoTxt" font-size="12.5" text-anchor="middle">in-toto</text>
+  </g>
+
+  <text x="500" y="482" class="sm" text-anchor="middle">every project named here is CNCF <tspan font-weight="700">graduated</tspan> &mdash; and they are a fraction of the landscape</text>
+</svg>
+<div class="callout">None of these replace what you learned. <strong>They all assume it</strong> &mdash; every one of them is configured with a YAML manifest, applied to an API server, and run in a Pod.</div>
+<div class="ref"><a href="https://landscape.cncf.io/" target="_blank" rel="noopener">CNCF Landscape</a> &middot; <a href="https://www.cncf.io/projects/" target="_blank" rel="noopener">CNCF Projects</a></div>
+<div class="notes">Thirty seconds of perspective, then stop &mdash; this is not a tour. The message is one sentence: <strong>Kubernetes is the corner stone, not the building</strong>. Four sessions bought them the thing everything else is built on, and the panels show what "everything else" means. Walk one name per panel, not all of them. <em>Ship</em>: Argo and Flux do GitOps &mdash; your manifests live in git and a controller makes the cluster match, which is the obvious next step after `kubectl apply`. <em>See</em>: Prometheus scrapes metrics from Pods and is how you would actually have caught the CPU throttling from the resources slide. <em>Stands on</em>: containerd is the runtime under every Pod they ran today, and etcd they already met on the Session 2 architecture slide. <em>Safe</em>: Kyverno and OPA enforce policy &mdash; "every container must declare resource limits" stops being advice and becomes a rule the API server refuses to break. Then the callout, which is the real point: none of this replaces the four sessions. Every project here is configured with a manifest, applied to an API server and run in a Pod &mdash; the shapes they spent eight hours learning. That is why this course stops here and why it was worth doing properly. Land it with the next slide: the CNCF Students link is how they walk into this ecosystem, and the KCNA certifies exactly what is in the middle box.</div>
+</section>
+
+<!-- 14 -->
+<section class="slide">
+<h2>Go deeper on your own</h2>
+<ol>
+  <li><a href="https://kubernetes.io/docs/concepts/services-networking/service/" target="_blank" rel="noopener">Service</a> <span class="muted">&middot; read the type comparison carefully</span></li>
+  <li><a href="https://kubernetes.io/docs/concepts/services-networking/dns-pod-service/" target="_blank" rel="noopener">DNS for Services and Pods</a> <span class="muted">&middot; short, demystifies discovery</span></li>
+  <li><a href="https://kubernetes.io/docs/concepts/configuration/configmap/" target="_blank" rel="noopener">ConfigMaps</a> &middot; <a href="https://kubernetes.io/docs/concepts/configuration/secret/" target="_blank" rel="noopener">Secrets</a> <span class="muted">&middot; note the Secret "risks" section</span></li>
+  <li><a href="https://kubernetes.io/docs/concepts/services-networking/ingress/" target="_blank" rel="noopener">Ingress</a> <span class="muted">&middot; when a port per app stops being funny</span></li>
+  <li><a href="https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/" target="_blank" rel="noopener">Configure probes</a> &middot; <a href="https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/" target="_blank" rel="noopener">Resource management</a> <span class="muted">&middot; the two habits production expects</span></li>
+  <li><a href="https://gateway-api.sigs.k8s.io/" target="_blank" rel="noopener">Gateway API</a> <span class="muted">&middot; where Ingress is heading</span></li>
+  <li><a href="https://kubernetes.io/docs/tutorials/configuration/configure-persistent-volume-storage/" target="_blank" rel="noopener">Persistent volume storage</a></li>
+  <li><a href="https://github.com/cncf/students" target="_blank" rel="noopener">CNCF Students</a> <span class="muted">&middot; free Linux Foundation courses, the KCNA certification, paid open-source mentorships, discounted KubeCon tickets &mdash; start here</span></li>
+</ol>
+<p class="punch" style="font-size:1.15em">The last one is not documentation. <em>It is the way in.</em></p>
+<div class="notes">Spend thirty seconds on the last link and mean it. <a href="https://github.com/cncf/students" target="_blank" rel="noopener">github.com/cncf/students</a> is the CNCF's own hub for students getting into the cloud native community: free Linux Foundation training, the <strong>KCNA</strong> &mdash; Kubernetes and Cloud Native Associate, the entry-level certification and the natural next step after these four sessions &mdash; paid open-source mentorship programmes, free or discounted KubeCon tickets, a job board across CNCF member companies, and help starting a local community group. That last one is worth naming out loud in Dakar: the repo explains how to start a campus or city group, and this room is already one. Everything else on this slide is reading; this one is a door.</div>
+</section>
+
+</div>
+<footer>
+  <span class="hint">&larr; &rarr; navigate &middot; N notes &middot; F fullscreen &middot; Ctrl/Cmd+P export PDF</span>
+  <span><span id="cur">1</span> / <span id="tot">1</span></span>
+</footer>
+<script src="../../assets/deck.js"></script>
+</body>
+</html>
